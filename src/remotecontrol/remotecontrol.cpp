@@ -43,7 +43,14 @@ void RemoteControl::endGroup()
     m_idle.stop();
     if (m_groupOpen) {
         m_groupOpen = false;
-        pCore->undoStack()->endMacro();
+        auto stack = pCore->undoStack();
+        stack->endMacro();
+        // A group in which every command failed would leave a no-op entry that swallows the user's next Ctrl+Z.
+        auto *macro = const_cast<QUndoCommand *>(stack->command(stack->index() - 1));
+        if (macro && macro->childCount() == 0) {
+            macro->setObsolete(true);
+            stack->undo(); // obsolete commands are dropped from the stack when undone
+        }
     }
 }
 

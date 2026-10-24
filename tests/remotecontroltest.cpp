@@ -166,6 +166,15 @@ TEST_CASE("RC undo groups", "[RemoteControl]")
         REQUIRE(errCode(rc(r, QStringLiteral("undo.end"))) == QStringLiteral("no_group"));
     }
 
+    SECTION("an empty group leaves no undo entry")
+    {
+        const int count = f.undoStack->count();
+        REQUIRE(rc(r, QStringLiteral("undo.begin"), {{QStringLiteral("label"), QStringLiteral("empty")}}).value(QStringLiteral("ok")).toBool());
+        REQUIRE(errCode(cut(r, f.cid, 100)) == QStringLiteral("bad_params")); // fails, pushes nothing
+        REQUIRE(rc(r, QStringLiteral("undo.end")).value(QStringLiteral("ok")).toBool());
+        REQUIRE(f.undoStack->count() == count);
+    }
+
     SECTION("idle group auto-closes so a user edit is its own step")
     {
         r.setIdleTimeoutMs(50);

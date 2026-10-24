@@ -35,9 +35,10 @@ async def main() -> None:
     clip = (video or tl["clips"])[0]
     effect = "sepia" if video else "volume"
     start_count = len(tl["clips"])
+    mid = clip["position"] + clip["duration"] // 2
 
     await kd.call("undo.begin", {"label": "e2e"})
-    cut = await kd.call("clip.cut", {"clipId": clip["id"], "position": clip["position"] + 125})
+    cut = await kd.call("clip.cut", {"clipId": clip["id"], "position": mid})
     right = {"type": "clip", "id": cut["rightId"]}
     await kd.call("effect.add", {"target": right, "effectId": effect})
     await kd.call("undo.end")
@@ -53,10 +54,11 @@ async def main() -> None:
     await kd.call("redo")
     tl = await kd.call("timeline.get")
     assert len(tl["clips"]) == start_count + 1
-    right_now = next(c for c in tl["clips"] if c["position"] == clip["position"] + 125 and c["trackId"] == clip["trackId"])
+    right_now = next(c for c in tl["clips"] if c["position"] == mid and c["trackId"] == clip["trackId"])
     assert [e["effectId"] for e in await kd.call("effect.get", {"target": {"type": "clip", "id": right_now["id"]}})] == [effect]
 
     assert await kd.call("action.list", {"filter": "razor"}), "razor action missing"
+    await kd.call("undo")  # leave the timeline as we found it, so the check is repeatable
     print("E2E OK")
 
 
