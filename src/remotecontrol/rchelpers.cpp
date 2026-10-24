@@ -67,6 +67,21 @@ std::optional<double> rcDouble(const QJsonObject &p, const char *key, RcReply &e
     return v.toDouble();
 }
 
+std::optional<bool> rcBool(const QJsonObject &p, const char *key, RcReply &err, std::optional<bool> def)
+{
+    const QJsonValue v = p.value(QString::fromLatin1(key));
+    if (v.isUndefined() || v.isNull()) {
+        if (def) return def;
+        err = rcFail(QStringLiteral("bad_params"), QStringLiteral("missing bool '%1'").arg(QString::fromLatin1(key)));
+        return std::nullopt;
+    }
+    if (!v.isBool()) {
+        err = rcFail(QStringLiteral("bad_params"), QStringLiteral("'%1' must be a bool").arg(QString::fromLatin1(key)));
+        return std::nullopt;
+    }
+    return v.toBool();
+}
+
 std::optional<QString> rcString(const QJsonObject &p, const char *key, RcReply &err, std::optional<QString> def)
 {
     const QJsonValue v = p.value(keyName(key));

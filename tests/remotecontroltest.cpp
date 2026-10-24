@@ -257,3 +257,72 @@ TEST_CASE("RC actions need the GUI", "[RemoteControl]")
     REQUIRE(errCode(rc(r, QStringLiteral("action.list"))) == QStringLiteral("no_gui"));
     REQUIRE(errCode(rc(r, QStringLiteral("action.trigger"), {{QStringLiteral("name"), QStringLiteral("edit_undo")}})) == QStringLiteral("no_gui"));
 }
+
+static int clipPos(RemoteControl &r, int cid)
+{
+    for (const auto &c : clipsOf(r)) {
+        if (c.toObject().value(QStringLiteral("id")).toInt() == cid) return c.toObject().value(QStringLiteral("position")).toInt();
+    }
+    return -1;
+}
+
+TEST_CASE("RC clip editing", "[RemoteControl]")
+{
+    RcFixture f;
+    RemoteControl r;
+    auto ok = [](const QJsonObject &o) { return o.value(QStringLiteral("ok")).toBool(); };
+
+    SECTION("move + undo, stale id")
+    {
+        REQUIRE(
+            ok(rc(r, QStringLiteral("clip.move"), {{QStringLiteral("clipId"), f.cid}, {QStringLiteral("trackId"), f.tid}, {QStringLiteral("position"), 300}})));
+        REQUIRE(clipPos(r, f.cid) == 300);
+        f.undoStack->undo();
+        REQUIRE(clipPos(r, f.cid) == 100);
+        REQUIRE(f.timeline->requestItemDeletion(f.cid));
+        REQUIRE(errCode(rc(r, QStringLiteral("clip.move"),
+                           {{QStringLiteral("clipId"), f.cid}, {QStringLiteral("trackId"), f.tid}, {QStringLiteral("position"), 0}})) ==
+                QStringLiteral("not_found"));
+    }
+
+    SECTION("locked track refuses with a message")
+    {
+        f.timeline->setTrackLockedState(f.tid, true);
+        auto reply =
+            rc(r, QStringLiteral("clip.move"), {{QStringLiteral("clipId"), f.cid}, {QStringLiteral("trackId"), f.tid}, {QStringLiteral("position"), 300}});
+        REQUIRE(errCode(reply) == QStringLiteral("failed"));
+        REQUIRE(reply.value(QStringLiteral("error")).toObject().value(QStringLiteral("message")).toString().contains(QStringLiteral("locked")));
+        REQUIRE(clipPos(r, f.cid) == 100);
+    }
+
+    SECTION("occupied spot, insert, resize, delete, speed")
+    {
+        auto ins =
+            rc(r, QStringLiteral("clip.insert"), {{QStringLiteral("binId"), f.binId}, {QStringLiteral("trackId"), f.tid}, {QStringLiteral("position"), 200}});
+        REQUIRE(ok(ins));
+        const int cid2 = ins.value(QStringLiteral("result")).toObject().value(QStringLiteral("clipId")).toInt();
+        REQUIRE(clipPos(r, cid2) == 200);
+        REQUIRE(errCode(rc(r, QStringLiteral("clip.move"),
+                           {{QStringLiteral("clipId"), cid2}, {QStringLiteral("trackId"), f.tid}, {QStringLiteral("position"), 105}})) ==
+                QStringLiteral("failed"));
+        REQUIRE(ok(rc(r, QStringLiteral("clip.resize"), {{QStringLiteral("clipId"), f.cid}, {QStringLiteral("duration"), 10}})));
+        REQUIRE(f.timeline->getClipPlaytime(f.cid) == 10);
+        REQUIRE(errCode(rc(r, QStringLiteral("clip.speed"), {{QStringLiteral("clipId"), f.cid}, {QStringLiteral("speed"), 0}})) ==
+                QStringLiteral("bad_params"));
+        REQUIRE(ok(rc(r, QStringLiteral("clip.delete"), {{QStringLiteral("clipId"), cid2}})));
+        REQUIRE(clipsOf(r).size() == 1);
+    }
+
+    SECTION("group and select")
+    {
+        auto ins =
+            rc(r, QStringLiteral("clip.insert"), {{QStringLiteral("binId"), f.binId}, {QStringLiteral("trackId"), f.tid}, {QStringLiteral("position"), 200}});
+        const int cid2 = ins.value(QStringLiteral("result")).toObject().value(QStringLiteral("clipId")).toInt();
+        auto g = rc(r, QStringLiteral("group.create"), {{QStringLiteral("ids"), QJsonArray{f.cid, cid2}}});
+        REQUIRE(ok(g));
+        REQUIRE(f.timeline->isInGroup(f.cid));
+        REQUIRE(ok(rc(r, QStringLiteral("timeline.select"), {{QStringLiteral("ids"), QJsonArray{cid2}}})));
+        REQUIRE(!rc(r, QStringLiteral("timeline.get")).value(QStringLiteral("result")).toObject().value(QStringLiteral("selection")).toArray().isEmpty());
+        REQUIRE(errCode(rc(r, QStringLiteral("group.create"), {{QStringLiteral("ids"), QJsonArray{f.cid, 9999}}})) == QStringLiteral("not_found"));
+    }
+}

@@ -17,6 +17,7 @@ class EffectStackModel;
 std::shared_ptr<TimelineItemModel> rcTimeline(RcReply &err);
 std::optional<int> rcInt(const QJsonObject &p, const char *key, RcReply &err, std::optional<int> def = {});
 std::optional<double> rcDouble(const QJsonObject &p, const char *key, RcReply &err, std::optional<double> def = {});
+std::optional<bool> rcBool(const QJsonObject &p, const char *key, RcReply &err, std::optional<bool> def = {});
 std::optional<QString> rcString(const QJsonObject &p, const char *key, RcReply &err, std::optional<QString> def = {});
 std::optional<int> rcClip(const std::shared_ptr<TimelineItemModel> &tl, const QJsonObject &p, RcReply &err, const char *key = "clipId");
 std::optional<int> rcTrack(const std::shared_ptr<TimelineItemModel> &tl, const QJsonObject &p, RcReply &err, const char *key = "trackId");
