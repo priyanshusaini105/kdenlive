@@ -241,3 +241,10 @@ TEST_CASE("RC effects", "[RemoteControl]")
         REQUIRE(errCode(rc(r, QStringLiteral("effect.get"), {{QStringLiteral("target"), target}})) == QStringLiteral("not_found"));
     }
 }
+
+TEST_CASE("RC actions need the GUI", "[RemoteControl]")
+{
+    RemoteControl r;
+    REQUIRE(errCode(rc(r, QStringLiteral("action.list"))) == QStringLiteral("no_gui"));
+    REQUIRE(errCode(rc(r, QStringLiteral("action.trigger"), {{QStringLiteral("name"), QStringLiteral("edit_undo")}})) == QStringLiteral("no_gui"));
+}

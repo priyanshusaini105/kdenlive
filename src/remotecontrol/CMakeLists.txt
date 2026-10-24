@@ -2,6 +2,7 @@
 
 set(kdenlive_SRCS
   ${kdenlive_SRCS}
+  remotecontrol/commands_action.cpp
   remotecontrol/commands_effect.cpp
   remotecontrol/commands_timeline.cpp
   remotecontrol/commands_undo.cpp
