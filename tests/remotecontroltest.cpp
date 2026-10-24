@@ -448,3 +448,97 @@ TEST_CASE("RC asset catalog", "[RemoteControl]")
                        {{QStringLiteral("kind"), QStringLiteral("effect")}, {QStringLiteral("id"), QStringLiteral("nope")}})) == QStringLiteral("not_found"));
     REQUIRE(errCode(rc(r, QStringLiteral("asset.list"), {{QStringLiteral("kind"), QStringLiteral("filter")}})) == QStringLiteral("bad_params"));
 }
+
+static QStringList effectIds(RemoteControl &r, const QJsonObject &target)
+{
+    QStringList ids;
+    for (const auto &e : rc(r, QStringLiteral("effect.get"), {{QStringLiteral("target"), target}}).value(QStringLiteral("result")).toArray()) {
+        ids << e.toObject().value(QStringLiteral("effectId")).toString();
+    }
+    return ids;
+}
+
+TEST_CASE("RC effect stack and keyframes", "[RemoteControl]")
+{
+    RcFixture f;
+    RemoteControl r;
+    auto ok = [](const QJsonObject &o) { return o.value(QStringLiteral("ok")).toBool(); };
+    const QJsonObject target = clipTarget(f.cid);
+    REQUIRE(ok(rc(r, QStringLiteral("effect.add"), {{QStringLiteral("target"), target}, {QStringLiteral("effectId"), QStringLiteral("sepia")}})));
+    REQUIRE(ok(rc(r, QStringLiteral("effect.add"), {{QStringLiteral("target"), target}, {QStringLiteral("effectId"), QStringLiteral("crop")}})));
+    REQUIRE(effectIds(r, target) == QStringList{QStringLiteral("sepia"), QStringLiteral("crop")});
+
+    SECTION("move, enable, remove")
+    {
+        REQUIRE(ok(rc(r, QStringLiteral("effect.move"), {{QStringLiteral("target"), target}, {QStringLiteral("from"), 0}, {QStringLiteral("to"), 1}})));
+        REQUIRE(effectIds(r, target) == QStringList{QStringLiteral("crop"), QStringLiteral("sepia")});
+        f.undoStack->undo();
+        REQUIRE(effectIds(r, target) == QStringList{QStringLiteral("sepia"), QStringLiteral("crop")});
+
+        REQUIRE(
+            ok(rc(r, QStringLiteral("effect.enable"), {{QStringLiteral("target"), target}, {QStringLiteral("index"), 0}, {QStringLiteral("enabled"), false}})));
+        REQUIRE(!rc(r, QStringLiteral("effect.get"), {{QStringLiteral("target"), target}})
+                     .value(QStringLiteral("result"))
+                     .toArray()
+                     .at(0)
+                     .toObject()
+                     .value(QStringLiteral("enabled"))
+                     .toBool());
+
+        REQUIRE(ok(rc(r, QStringLiteral("effect.remove"), {{QStringLiteral("target"), target}, {QStringLiteral("index"), 1}})));
+        REQUIRE(effectIds(r, target) == QStringList{QStringLiteral("sepia")});
+        f.undoStack->undo();
+        REQUIRE(effectIds(r, target).size() == 2);
+    }
+
+    SECTION("keyframes are item-local, undoable, typed")
+    {
+        const QJsonObject kf{{QStringLiteral("target"), target}, {QStringLiteral("index"), 0}, {QStringLiteral("param"), QStringLiteral("u")}};
+        auto with = [](QJsonObject o, const QJsonObject &extra) {
+            for (auto it = extra.begin(); it != extra.end(); ++it)
+                o.insert(it.key(), it.value());
+            return o;
+        };
+        auto frames = [&]() {
+            QList<int> out;
+            for (const auto &k : rc(r, QStringLiteral("keyframe.list"), kf).value(QStringLiteral("result")).toArray()) {
+                out << k.toObject().value(QStringLiteral("frame")).toInt();
+            }
+            return out;
+        };
+        REQUIRE(frames().contains(0)); // clip at timeline 100 → first keyframe at item-local 0
+        REQUIRE(ok(
+            rc(r, QStringLiteral("keyframe.set"),
+               with(kf,
+                    {{QStringLiteral("frame"), 10}, {QStringLiteral("value"), QStringLiteral("200")}, {QStringLiteral("interp"), QStringLiteral("smooth")}}))));
+        REQUIRE(frames().contains(10));
+        bool found = false;
+        for (const auto &k : rc(r, QStringLiteral("keyframe.list"), kf).value(QStringLiteral("result")).toArray()) {
+            if (k.toObject().value(QStringLiteral("frame")).toInt() == 10) {
+                found = true;
+                REQUIRE(k.toObject().value(QStringLiteral("value")).toString().toDouble() == 200.);
+                REQUIRE(k.toObject().value(QStringLiteral("interp")).toString() == QStringLiteral("smooth"));
+            }
+        }
+        REQUIRE(found);
+        f.undoStack->undo();
+        REQUIRE(!frames().contains(10));
+
+        REQUIRE(ok(rc(r, QStringLiteral("keyframe.set"), with(kf, {{QStringLiteral("frame"), 5}, {QStringLiteral("value"), QStringLiteral("50")}}))));
+        REQUIRE(ok(rc(r, QStringLiteral("keyframe.move"), with(kf, {{QStringLiteral("frame"), 5}, {QStringLiteral("newFrame"), 8}}))));
+        REQUIRE(frames().contains(8));
+        REQUIRE(ok(rc(r, QStringLiteral("keyframe.remove"), with(kf, {{QStringLiteral("frame"), 8}}))));
+        REQUIRE(!frames().contains(8));
+        REQUIRE(errCode(rc(r, QStringLiteral("keyframe.remove"), with(kf, {{QStringLiteral("frame"), 8}}))) == QStringLiteral("not_found"));
+        REQUIRE(errCode(rc(r, QStringLiteral("keyframe.set"),
+                           with(kf, {{QStringLiteral("frame"), 3},
+                                     {QStringLiteral("value"), QStringLiteral("1")},
+                                     {QStringLiteral("interp"), QStringLiteral("wobbly")}}))) == QStringLiteral("bad_params"));
+        REQUIRE(errCode(rc(r, QStringLiteral("keyframe.set"),
+                           {{QStringLiteral("target"), target},
+                            {QStringLiteral("index"), 1},
+                            {QStringLiteral("param"), QStringLiteral("top")},
+                            {QStringLiteral("frame"), 0},
+                            {QStringLiteral("value"), QStringLiteral("1")}})) == QStringLiteral("bad_params"));
+    }
+}
