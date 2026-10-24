@@ -7,6 +7,7 @@
 #include "rccommand.h"
 
 #include <QObject>
+#include <QTimer>
 
 /** @class RemoteControl
     @brief JSON command dispatcher exported on D-Bus at /RemoteControl, so external tools (an MCP server) can drive the editor.
@@ -19,6 +20,11 @@ class RemoteControl : public QObject
 
 public:
     explicit RemoteControl(QObject *parent = nullptr);
+    /** @brief While an undo group is open, it closes itself after this many ms without a call (default 10000). */
+    void setIdleTimeoutMs(int ms);
+    bool groupOpen() const;
+    void beginGroup(const QString &label);
+    void endGroup();
 
 public Q_SLOTS:
     Q_SCRIPTABLE QString call(const QString &command, const QString &paramsJson);
@@ -26,4 +32,6 @@ public Q_SLOTS:
 
 private:
     RcRegistry m_registry;
+    QTimer m_idle;
+    bool m_groupOpen = false;
 };

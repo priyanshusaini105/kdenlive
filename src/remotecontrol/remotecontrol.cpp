@@ -4,6 +4,7 @@
 
 #include "remotecontrol.h"
 #include "core.h"
+#include "doc/docundostack.hpp"
 
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -12,6 +13,36 @@ RemoteControl::RemoteControl(QObject *parent)
     : QObject(parent)
 {
     registerTimelineCommands(m_registry);
+    registerUndoCommands(m_registry, this);
+    m_idle.setSingleShot(true);
+    m_idle.setInterval(10000);
+    connect(&m_idle, &QTimer::timeout, this, &RemoteControl::endGroup);
+}
+
+void RemoteControl::setIdleTimeoutMs(int ms)
+{
+    m_idle.setInterval(ms);
+}
+
+bool RemoteControl::groupOpen() const
+{
+    return m_groupOpen;
+}
+
+void RemoteControl::beginGroup(const QString &label)
+{
+    pCore->undoStack()->beginMacro(QStringLiteral("AI: ") + label);
+    m_groupOpen = true;
+    m_idle.start();
+}
+
+void RemoteControl::endGroup()
+{
+    m_idle.stop();
+    if (m_groupOpen) {
+        m_groupOpen = false;
+        pCore->undoStack()->endMacro();
+    }
 }
 
 static QString toJson(const QJsonObject &o)
@@ -34,6 +65,10 @@ QString RemoteControl::call(const QString &command, const QString &paramsJson)
     const QJsonDocument doc = QJsonDocument::fromJson(paramsJson.toUtf8(), &parseError);
     if (parseError.error != QJsonParseError::NoError || !doc.isObject()) {
         return replyJson(rcFail(QStringLiteral("bad_json"), QStringLiteral("params must be a JSON object")));
+    }
+    if (m_groupOpen) {
+        // Any AI activity keeps the group alive; silence closes it so user edits stay separate.
+        m_idle.start();
     }
     auto it = m_registry.constFind(command);
     if (it == m_registry.constEnd()) {

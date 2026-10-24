@@ -9,9 +9,11 @@
 #include "doc/kdenlivedoc.h"
 #include "remotecontrol/remotecontrol.h"
 
+#include <QEventLoop>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QTimer>
 
 static QJsonObject rc(RemoteControl &r, const QString &cmd, const QJsonObject &p = {})
 {
@@ -96,4 +98,85 @@ TEST_CASE("RC timeline.get + clip.cut", "[RemoteControl]")
     }
     timeline.reset();
     pCore->projectManager()->closeCurrentDocument(false, false);
+}
+
+/** One red 20-frame clip at frame 100 on a fresh track. */
+struct RcFixture
+{
+    std::shared_ptr<DocUndoStack> undoStack = std::make_shared<DocUndoStack>(nullptr);
+    KdenliveDoc document{undoStack};
+    std::shared_ptr<TimelineItemModel> timeline;
+    int tid = -1;
+    int cid = -1;
+    QString binId;
+    RcFixture()
+    {
+        pCore->projectManager()->testSetDocument(&document);
+        QDateTime documentDate = QDateTime::currentDateTime();
+        KdenliveTests::updateTimeline(false, QString(), QString(), documentDate, 0);
+        timeline = document.getTimeline(document.uuid());
+        pCore->projectManager()->testSetActiveTimeline(timeline);
+        REQUIRE(timeline->requestTrackInsertion(-1, tid));
+        binId = KdenliveTests::createProducer(pCore->getProjectProfile(), "red", pCore->projectItemModel());
+        REQUIRE(timeline->requestClipInsertion(binId, tid, 100, cid));
+    }
+    ~RcFixture()
+    {
+        timeline.reset();
+        pCore->projectManager()->closeCurrentDocument(false, false);
+    }
+};
+
+static QJsonObject cut(RemoteControl &r, int clipId, int pos)
+{
+    return rc(r, QStringLiteral("clip.cut"), {{QStringLiteral("clipId"), clipId}, {QStringLiteral("position"), pos}});
+}
+
+static void waitMs(int ms)
+{
+    QEventLoop loop;
+    QTimer::singleShot(ms, &loop, &QEventLoop::quit);
+    loop.exec();
+}
+
+TEST_CASE("RC undo groups", "[RemoteControl]")
+{
+    RcFixture f;
+    RemoteControl r;
+
+    SECTION("a group is one undo step labelled AI: <label>")
+    {
+        REQUIRE(rc(r, QStringLiteral("undo.begin"), {{QStringLiteral("label"), QStringLiteral("x")}}).value(QStringLiteral("ok")).toBool());
+        REQUIRE(cut(r, f.cid, 110).value(QStringLiteral("ok")).toBool());
+        REQUIRE(cut(r, f.cid, 105).value(QStringLiteral("ok")).toBool());
+        REQUIRE(rc(r, QStringLiteral("undo.end")).value(QStringLiteral("ok")).toBool());
+        REQUIRE(clipsOf(r).size() == 3);
+        REQUIRE(f.undoStack->text(f.undoStack->index() - 1) == QStringLiteral("AI: x"));
+        REQUIRE(rc(r, QStringLiteral("undo")).value(QStringLiteral("ok")).toBool());
+        REQUIRE(clipsOf(r).size() == 1);
+        REQUIRE(rc(r, QStringLiteral("redo")).value(QStringLiteral("ok")).toBool());
+        REQUIRE(clipsOf(r).size() == 3);
+    }
+
+    SECTION("nesting and stray end are errors")
+    {
+        REQUIRE(rc(r, QStringLiteral("undo.begin"), {{QStringLiteral("label"), QStringLiteral("a")}}).value(QStringLiteral("ok")).toBool());
+        REQUIRE(errCode(rc(r, QStringLiteral("undo.begin"), {{QStringLiteral("label"), QStringLiteral("b")}})) == QStringLiteral("group_open"));
+        REQUIRE(rc(r, QStringLiteral("undo.end")).value(QStringLiteral("ok")).toBool());
+        REQUIRE(errCode(rc(r, QStringLiteral("undo.end"))) == QStringLiteral("no_group"));
+    }
+
+    SECTION("idle group auto-closes so a user edit is its own step")
+    {
+        r.setIdleTimeoutMs(50);
+        REQUIRE(rc(r, QStringLiteral("undo.begin"), {{QStringLiteral("label"), QStringLiteral("idle")}}).value(QStringLiteral("ok")).toBool());
+        REQUIRE(cut(r, f.cid, 110).value(QStringLiteral("ok")).toBool());
+        waitMs(150);
+        REQUIRE(f.timeline->requestClipMove(f.cid, f.tid, 50));
+        f.undoStack->undo(); // user move
+        REQUIRE(clipsOf(r).size() == 2);
+        REQUIRE(clipsOf(r).at(0).toObject().value(QStringLiteral("position")).toInt() == 100);
+        f.undoStack->undo(); // AI cut group
+        REQUIRE(clipsOf(r).size() == 1);
+    }
 }

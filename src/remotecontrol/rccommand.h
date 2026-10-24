@@ -44,4 +44,7 @@ struct RcCommand
 
 using RcRegistry = QMap<QString, RcCommand>;
 
+class RemoteControl;
+
 void registerTimelineCommands(RcRegistry &r);
+void registerUndoCommands(RcRegistry &r, RemoteControl *rc);
