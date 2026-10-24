@@ -9,7 +9,9 @@ MCP server that drives a running Kdenlive (this fork's remote-control build) ove
    cmake -S . -B ../build -G Ninja -DCMAKE_BUILD_TYPE=Release \
      -DCMAKE_INSTALL_PREFIX=$HOME/.local/opt/kdenlive-rc -DKDE_INSTALL_USE_QT_SYS_PATHS=OFF
    ninja -C ../build -j4 kdenlive kdenlive_render mltpreview && cmake --install ../build
-   dev/kdenlive-rc.sh
+   systemd-run --user --unit=kdenlive-rc --collect --setenv=DISPLAY=$DISPLAY \
+     --setenv=WAYLAND_DISPLAY=$WAYLAND_DISPLAY --setenv=DBUS_SESSION_BUS_ADDRESS=$DBUS_SESSION_BUS_ADDRESS \
+     $PWD/dev/kdenlive-rc.sh        # or run dev/kdenlive-rc.sh from a terminal
    ```
 2. Register with Claude Code:
    ```sh

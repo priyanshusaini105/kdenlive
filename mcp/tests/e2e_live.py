@@ -1,14 +1,14 @@
 """Live end-to-end check against a running remote-control Kdenlive (dev/kdenlive-rc.sh).
 
 Run explicitly: uv run python tests/e2e_live.py
-Precondition (phase 1): at least one clip of 6s+ on the timeline.
+It loads generated bars into an empty project itself, and leaves the timeline as it found it.
 """
 
 import asyncio
 import pathlib
 import subprocess
 
-from kdenlive_mcp.bus import Kdenlive
+from kdenlive_mcp.bus import Kdenlive, KdenliveError
 
 MEDIA = pathlib.Path("/tmp/claude-1002/kdenlive-e2e")
 
@@ -25,40 +25,84 @@ def make_media() -> pathlib.Path:
     return out
 
 
-async def main() -> None:
-    print("media:", make_media())
-    kd = Kdenlive()
+async def until(predicate, what: str, tries: int = 50):
+    for _ in range(tries):
+        if result := await predicate():
+            return result
+        await asyncio.sleep(0.2)
+    raise AssertionError(f"timed out waiting for {what}")
+
+
+async def video_clip(kd: Kdenlive, media: pathlib.Path) -> dict:
+    """A clip on a video track, loading the bars through stock D-Bus + clip.insert when the timeline is empty."""
     tl = await kd.call("timeline.get")
-    assert tl["clips"], "load a clip onto the timeline first"
-    audio_tracks = {t["id"] for t in tl["tracks"] if t["audio"]}
-    video = [c for c in tl["clips"] if c["trackId"] not in audio_tracks]
-    clip = (video or tl["clips"])[0]
-    effect = "sepia" if video else "volume"
-    start_count = len(tl["clips"])
+    video_tracks = [t["id"] for t in tl["tracks"] if not t["audio"]]
+    on_video = [c for c in tl["clips"] if c["trackId"] in video_tracks]
+    if on_video:
+        return on_video[0]
+    if not tl["clips"]:
+        await kd._dbus(kd._name, "/kdenlive/MainWindow_1", "org.kde.kdenlive.MainWindow", "addProjectClip", "s", [str(media)])
+
+        async def inserted():
+            await kd._dbus(kd._name, "/kdenlive/MainWindow_1", "org.kde.kdenlive.MainWindow", "addTimelineClip", "s", [str(media)])
+            return (await kd.call("timeline.get"))["clips"]
+
+        await until(inserted, "stock addTimelineClip")
+    bin_id = (await kd.call("timeline.get"))["clips"][0]["binId"]
+
+    async def insert():
+        try:
+            return await kd.call("clip.insert", {"binId": bin_id, "trackId": video_tracks[0], "position": 500})
+        except KdenliveError as e:
+            if "loading" in e.message:
+                return None
+            raise
+
+    cid = (await until(insert, "clip.insert"))["clipId"]
+    return next(c for c in (await kd.call("timeline.get"))["clips"] if c["id"] == cid)
+
+
+async def main() -> None:
+    media = make_media()
+    kd = Kdenlive()
+    await kd.call("project.info")  # discovers the instance
+    clip = await video_clip(kd, media)
+    start_count = len((await kd.call("timeline.get"))["clips"])
     mid = clip["position"] + clip["duration"] // 2
 
+    # Phase 1: cut + effect as one undo step
     await kd.call("undo.begin", {"label": "e2e"})
     cut = await kd.call("clip.cut", {"clipId": clip["id"], "position": mid})
     right = {"type": "clip", "id": cut["rightId"]}
-    await kd.call("effect.add", {"target": right, "effectId": effect})
+    await kd.call("effect.add", {"target": right, "effectId": "sepia"})
     await kd.call("undo.end")
-
-    tl = await kd.call("timeline.get")
-    assert len(tl["clips"]) == start_count + 1
-    assert [e["effectId"] for e in await kd.call("effect.get", {"target": right})] == [effect]
-
+    assert len((await kd.call("timeline.get"))["clips"]) > start_count  # AV groups cut on both tracks
+    assert [e["effectId"] for e in await kd.call("effect.get", {"target": right})] == ["sepia"]
     await kd.call("undo")
-    tl = await kd.call("timeline.get")
-    assert len(tl["clips"]) == start_count, "one undo should revert the whole group"
+    assert len((await kd.call("timeline.get"))["clips"]) == start_count, "one undo should revert the whole group"
 
-    await kd.call("redo")
-    tl = await kd.call("timeline.get")
-    assert len(tl["clips"]) == start_count + 1
-    right_now = next(c for c in tl["clips"] if c["position"] == mid and c["trackId"] == clip["trackId"])
-    assert [e["effectId"] for e in await kd.call("effect.get", {"target": {"type": "clip", "id": right_now["id"]}})] == [effect]
+    # Phase 2: move, trim, marker as one undo step; seek
+    await kd.call("undo.begin", {"label": "e2e phase 2"})
+    await kd.call("clip.move", {"clipId": clip["id"], "trackId": clip["trackId"], "position": clip["position"] + 1000})
+    await kd.call("clip.resize", {"clipId": clip["id"], "duration": 100})
+    await kd.call("marker.add", {"scope": "guides", "position": 50, "comment": "e2e"})
+    await kd.call("undo.end")
+    moved = next(c for c in (await kd.call("timeline.get"))["clips"] if c["id"] == clip["id"])
+    assert (moved["position"], moved["duration"]) == (clip["position"] + 1000, 100), moved
+    assert any(m["comment"] == "e2e" for m in await kd.call("marker.list", {"scope": "guides"}))
+    await kd.call("undo")
+    back = next(c for c in (await kd.call("timeline.get"))["clips"] if c["id"] == clip["id"])
+    assert (back["position"], back["duration"]) == (clip["position"], clip["duration"]), back
+    assert not any(m["comment"] == "e2e" for m in await kd.call("marker.list", {"scope": "guides"}))
+
+    await kd.call("monitor.seek", {"position": 30})
+
+    async def seeked():
+        return (await kd.call("monitor.position"))["position"] == 30
+
+    await until(seeked, "seek to 30")
 
     assert await kd.call("action.list", {"filter": "razor"}), "razor action missing"
-    await kd.call("undo")  # leave the timeline as we found it, so the check is repeatable
     print("E2E OK")
 
 

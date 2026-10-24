@@ -191,5 +191,120 @@ async def kdenlive_call(command: str, params: dict | None = None) -> Any:
     return await call(command, params)
 
 
+async def _clip(clip_id: int) -> dict:
+    for c in (await call("timeline.get"))["clips"]:
+        if c["id"] == clip_id:
+            return c
+    raise ToolError(f"no clip {clip_id}; ids change after edits, re-read get_timeline")
+
+
+@server.tool()
+async def insert_clip(bin_id: str, track_id: int, time: str | int | None = None) -> int:
+    """Insert a bin clip on a track at a time (default: playhead). Returns the new clip id."""
+    async with step("insert clip"):
+        return (await call("clip.insert", {"binId": bin_id, "trackId": track_id, "position": await frames(time)}))["clipId"]
+
+
+@server.tool()
+async def move_clip(clip_id: int, time: str | int, track_id: int | None = None) -> str:
+    """Move a clip to a time, optionally to another track."""
+    t = await frames(time, default_playhead=False)
+    track = track_id if track_id is not None else (await _clip(clip_id))["trackId"]
+    async with step("move clip"):
+        await call("clip.move", {"clipId": clip_id, "trackId": track, "position": t})
+    return "ok"
+
+
+@server.tool()
+async def trim_clip(clip_id: int, duration: str | int, from_end: bool = True) -> int:
+    """Set a clip's duration, trimming its end (default) or its start. Returns the new duration in frames."""
+    d = await frames(duration, default_playhead=False)
+    async with step("trim clip"):
+        return (await call("clip.resize", {"clipId": clip_id, "duration": d, "fromEnd": from_end}))["duration"]
+
+
+@server.tool()
+async def delete_clips(clip_ids: list[int] | None = None) -> str:
+    """Delete clips (default: the selection)."""
+    ids = clip_ids or (await call("timeline.get"))["selection"]
+    if not ids:
+        raise ToolError("nothing selected; pass clip_ids")
+    async with step("delete clips"):
+        for cid in ids:
+            await call("clip.delete", {"clipId": cid})
+    return "ok"
+
+
+@server.tool()
+async def set_speed(clip_id: int, speed: float) -> str:
+    """Change clip speed as a ratio: 2.0 = twice as fast, 0.5 = slow motion, -1 = reverse."""
+    async with step("speed"):
+        await call("clip.speed", {"clipId": clip_id, "speed": speed})
+    return "ok"
+
+
+@server.tool()
+async def add_track(audio: bool, name: str | None = None) -> int:
+    """Add a video (audio=false) or audio track. Returns its id."""
+    params: dict[str, Any] = {"audio": audio}
+    if name:
+        params["name"] = name
+    async with step("add track"):
+        return (await call("track.add", params))["trackId"]
+
+
+@server.tool()
+async def set_track(track_id: int, name: str | None = None, locked: bool | None = None, hidden: bool | None = None, muted: bool | None = None) -> str:
+    """Rename, lock, hide (video) or mute (audio) a track."""
+    async with step("track"):
+        if name is not None:
+            await call("track.rename", {"trackId": track_id, "name": name})
+        if locked is not None:
+            await call("track.lock", {"trackId": track_id, "locked": locked})
+        if hidden is not None:
+            await call("track.hide", {"trackId": track_id, "hidden": hidden})
+        if muted is not None:
+            await call("track.mute", {"trackId": track_id, "muted": muted})
+    return "ok"
+
+
+@server.tool()
+async def add_marker(time: str | int | None = None, comment: str = "", clip_bin_id: str | None = None) -> str:
+    """Add a timeline guide (default) or a marker on a bin clip, at a time (default: playhead)."""
+    params: dict[str, Any] = {"position": await frames(time), "comment": comment}
+    params.update({"scope": "clip", "binId": clip_bin_id} if clip_bin_id else {"scope": "guides"})
+    async with step("marker"):
+        await call("marker.add", params)
+    return "ok"
+
+
+@server.tool()
+async def set_zone(start: str | int, end: str | int) -> str:
+    """Set the timeline in/out zone (end exclusive)."""
+    await call("zone.set", {"in": await frames(start, False), "out": await frames(end, False)})
+    return "ok"
+
+
+@server.tool()
+async def seek(time: str | int) -> str:
+    """Move the playhead."""
+    await call("monitor.seek", {"position": await frames(time, False)})
+    return "ok"
+
+
+@server.tool()
+async def play(play: bool = True) -> str:
+    """Play or pause the project monitor."""
+    await call("monitor.play", {"play": play})
+    return "ok"
+
+
+@server.tool()
+async def select(clip_ids: list[int]) -> str:
+    """Select clips in the timeline."""
+    await call("timeline.select", {"ids": clip_ids})
+    return "ok"
+
+
 def main() -> None:
     server.run("stdio")
