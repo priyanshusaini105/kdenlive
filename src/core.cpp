@@ -16,6 +16,10 @@ SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-KDE-Accepted-GPL
 #include "capture/mediacapture.h"
 #include "config-kdenlive.h"
 #include "core.h"
+#ifndef NODBUS
+#include "remotecontrol/remotecontrol.h"
+#include <QDBusConnection>
+#endif
 #include "dialogs/proxytest.h"
 #include "dialogs/splash.hpp"
 #include "dialogs/subtitleedit.h"
@@ -438,6 +442,9 @@ void Core::initGUI(const QString &MltPath, const QUrl &Url, const QStringList &c
     m_mainWindow->init();
 
     m_guiConstructed = true;
+#ifndef NODBUS
+    QDBusConnection::sessionBus().registerObject(QStringLiteral("/RemoteControl"), new RemoteControl(this), QDBusConnection::ExportScriptableSlots);
+#endif
     m_projectItemModel->buildPlaylist(QUuid());
     // load the profiles from disk
     ProfileRepository::get()->refresh();

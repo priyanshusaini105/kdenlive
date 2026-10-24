@@ -30,6 +30,7 @@ set(KdenliveTest_SOURCES
     projectpathstest.cpp
     otiotest.cpp
     regressions.cpp
+    remotecontroltest.cpp
     rendermodeltest.cpp
     renderservertest.cpp
     replacetest.cpp

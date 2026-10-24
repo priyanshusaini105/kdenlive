@@ -1,0 +1,67 @@
+/*
+    SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-KDE-Accepted-GPL
+*/
+
+#include "remotecontrol.h"
+#include "core.h"
+
+#include <QJsonArray>
+#include <QJsonDocument>
+
+RemoteControl::RemoteControl(QObject *parent)
+    : QObject(parent)
+{
+    registerTimelineCommands(m_registry);
+}
+
+static QString toJson(const QJsonObject &o)
+{
+    return QString::fromUtf8(QJsonDocument(o).toJson(QJsonDocument::Compact));
+}
+
+static QString replyJson(const RcReply &r)
+{
+    if (r.ok()) {
+        return toJson({{QStringLiteral("ok"), true}, {QStringLiteral("result"), r.result}});
+    }
+    return toJson(
+        {{QStringLiteral("ok"), false}, {QStringLiteral("error"), QJsonObject{{QStringLiteral("code"), r.code}, {QStringLiteral("message"), r.message}}}});
+}
+
+QString RemoteControl::call(const QString &command, const QString &paramsJson)
+{
+    QJsonParseError parseError;
+    const QJsonDocument doc = QJsonDocument::fromJson(paramsJson.toUtf8(), &parseError);
+    if (parseError.error != QJsonParseError::NoError || !doc.isObject()) {
+        return replyJson(rcFail(QStringLiteral("bad_json"), QStringLiteral("params must be a JSON object")));
+    }
+    auto it = m_registry.constFind(command);
+    if (it == m_registry.constEnd()) {
+        return replyJson(rcFail(QStringLiteral("unknown_command"), QStringLiteral("unknown command '%1'; see listCommands").arg(command)));
+    }
+    if (it->needsGui && !pCore->window()) {
+        return replyJson(rcFail(QStringLiteral("no_gui"), QStringLiteral("'%1' needs the Kdenlive window").arg(command)));
+    }
+    return replyJson(it->run(doc.object()));
+}
+
+QString RemoteControl::listCommands()
+{
+    QJsonArray list;
+    for (const RcCommand &c : std::as_const(m_registry)) {
+        QJsonArray params;
+        for (const RcParam &p : c.params) {
+            params.append(QJsonObject{{QStringLiteral("name"), p.name},
+                                      {QStringLiteral("type"), p.type},
+                                      {QStringLiteral("required"), p.required},
+                                      {QStringLiteral("description"), p.description}});
+        }
+        list.append(QJsonObject{{QStringLiteral("name"), c.name},
+                                {QStringLiteral("description"), c.description},
+                                {QStringLiteral("params"), params},
+                                {QStringLiteral("mutating"), c.mutating},
+                                {QStringLiteral("undoable"), c.undoable},
+                                {QStringLiteral("needsGui"), c.needsGui}});
+    }
+    return QString::fromUtf8(QJsonDocument(list).toJson(QJsonDocument::Compact));
+}
