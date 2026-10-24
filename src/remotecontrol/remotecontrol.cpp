@@ -19,6 +19,7 @@ RemoteControl::RemoteControl(QObject *parent)
     registerClipCommands(m_registry);
     registerTrackCommands(m_registry);
     registerMarkerCommands(m_registry);
+    registerMonitorCommands(m_registry);
     m_idle.setSingleShot(true);
     m_idle.setInterval(10000);
     connect(&m_idle, &QTimer::timeout, this, &RemoteControl::endGroup);

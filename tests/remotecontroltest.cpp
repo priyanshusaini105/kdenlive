@@ -408,3 +408,11 @@ TEST_CASE("RC markers and guides", "[RemoteControl]")
     REQUIRE(rc(r, QStringLiteral("marker.categories")).value(QStringLiteral("result")).toArray().size() > 0);
     REQUIRE(errCode(rc(r, QStringLiteral("zone.get"))) == QStringLiteral("no_gui"));
 }
+
+TEST_CASE("RC monitor needs the GUI", "[RemoteControl]")
+{
+    RemoteControl r;
+    REQUIRE(errCode(rc(r, QStringLiteral("monitor.seek"), {{QStringLiteral("position"), 10}})) == QStringLiteral("no_gui"));
+    REQUIRE(errCode(rc(r, QStringLiteral("monitor.play"), {{QStringLiteral("play"), true}})) == QStringLiteral("no_gui"));
+    REQUIRE(errCode(rc(r, QStringLiteral("monitor.position"))) == QStringLiteral("no_gui"));
+}

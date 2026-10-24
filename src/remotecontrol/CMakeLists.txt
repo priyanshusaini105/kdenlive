@@ -6,6 +6,7 @@ set(kdenlive_SRCS
   remotecontrol/commands_clip.cpp
   remotecontrol/commands_effect.cpp
   remotecontrol/commands_marker.cpp
+  remotecontrol/commands_monitor.cpp
   remotecontrol/commands_timeline.cpp
   remotecontrol/commands_track.cpp
   remotecontrol/commands_undo.cpp
