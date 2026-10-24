@@ -27,6 +27,14 @@ class KdenliveError(RuntimeError):
         self.message = message
 
 
+def session_bus_address(env, uid: int, exists=os.path.exists) -> str | None:
+    """Session bus from the environment, else the standard systemd user socket (MCP hosts may strip env)."""
+    if env.get("DBUS_SESSION_BUS_ADDRESS"):
+        return env["DBUS_SESSION_BUS_ADDRESS"]
+    path = f"/run/user/{uid}/bus"
+    return f"unix:path={path}" if exists(path) else None
+
+
 def pick_instance(candidates: list[tuple[str, int]], env_pid: str | None) -> str:
     """candidates: (bus name, pid) already filtered to those exposing /RemoteControl."""
     if env_pid:
@@ -58,7 +66,10 @@ class Kdenlive:
 
     async def _discover(self) -> str:
         if self._bus is None or not self._bus.connected:
-            self._bus = await MessageBus().connect()
+            address = session_bus_address(os.environ, os.getuid())
+            if address is None:
+                raise KdenliveNotRunning("no D-Bus session bus found (DBUS_SESSION_BUS_ADDRESS unset, no /run/user/<uid>/bus)")
+            self._bus = await MessageBus(bus_address=address).connect()
         names = (await self._dbus("org.freedesktop.DBus", "/org/freedesktop/DBus", "org.freedesktop.DBus", "ListNames")).body[0]
         candidates = []
         for name in names:
