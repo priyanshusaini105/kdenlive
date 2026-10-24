@@ -369,3 +369,42 @@ TEST_CASE("RC tracks", "[RemoteControl]")
     REQUIRE(errCode(rc(r, QStringLiteral("track.rename"), {{QStringLiteral("trackId"), atid}, {QStringLiteral("name"), QStringLiteral("x")}})) ==
             QStringLiteral("not_found"));
 }
+
+TEST_CASE("RC markers and guides", "[RemoteControl]")
+{
+    RcFixture f;
+    RemoteControl r;
+    auto ok = [](const QJsonObject &o) { return o.value(QStringLiteral("ok")).toBool(); };
+    const QJsonObject guides{{QStringLiteral("scope"), QStringLiteral("guides")}};
+    auto list = [&](const QJsonObject &scope) { return rc(r, QStringLiteral("marker.list"), scope).value(QStringLiteral("result")).toArray(); };
+    auto with = [](QJsonObject o, const QJsonObject &extra) {
+        for (auto it = extra.begin(); it != extra.end(); ++it)
+            o.insert(it.key(), it.value());
+        return o;
+    };
+
+    REQUIRE(ok(rc(r, QStringLiteral("marker.add"), with(guides, {{QStringLiteral("position"), 50}, {QStringLiteral("comment"), QStringLiteral("intro")}}))));
+    REQUIRE(list(guides).size() == 1);
+    REQUIRE(list(guides).at(0).toObject().value(QStringLiteral("position")).toInt() == 50);
+    REQUIRE(list(guides).at(0).toObject().value(QStringLiteral("comment")).toString() == QStringLiteral("intro"));
+
+    REQUIRE(
+        ok(rc(r, QStringLiteral("marker.edit"),
+              with(guides, {{QStringLiteral("position"), 50}, {QStringLiteral("newPosition"), 60}, {QStringLiteral("comment"), QStringLiteral("start")}}))));
+    REQUIRE(list(guides).at(0).toObject().value(QStringLiteral("position")).toInt() == 60);
+    REQUIRE(list(guides).at(0).toObject().value(QStringLiteral("comment")).toString() == QStringLiteral("start"));
+
+    REQUIRE(errCode(rc(r, QStringLiteral("marker.remove"), with(guides, {{QStringLiteral("position"), 999}}))) == QStringLiteral("not_found"));
+    REQUIRE(ok(rc(r, QStringLiteral("marker.remove"), with(guides, {{QStringLiteral("position"), 60}}))));
+    REQUIRE(list(guides).isEmpty());
+    f.undoStack->undo();
+    REQUIRE(list(guides).size() == 1);
+
+    const QJsonObject clipScope{{QStringLiteral("scope"), QStringLiteral("clip")}, {QStringLiteral("binId"), f.binId}};
+    REQUIRE(ok(rc(r, QStringLiteral("marker.add"), with(clipScope, {{QStringLiteral("position"), 5}, {QStringLiteral("duration"), 4}}))));
+    REQUIRE(list(clipScope).at(0).toObject().value(QStringLiteral("duration")).toInt() == 4);
+    REQUIRE(errCode(rc(r, QStringLiteral("marker.list"),
+                       {{QStringLiteral("scope"), QStringLiteral("clip")}, {QStringLiteral("binId"), QStringLiteral("nope")}})) == QStringLiteral("not_found"));
+    REQUIRE(rc(r, QStringLiteral("marker.categories")).value(QStringLiteral("result")).toArray().size() > 0);
+    REQUIRE(errCode(rc(r, QStringLiteral("zone.get"))) == QStringLiteral("no_gui"));
+}
