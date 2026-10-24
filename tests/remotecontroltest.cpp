@@ -180,3 +180,64 @@ TEST_CASE("RC undo groups", "[RemoteControl]")
         REQUIRE(clipsOf(r).size() == 1);
     }
 }
+
+static QJsonObject clipTarget(int cid)
+{
+    return {{QStringLiteral("type"), QStringLiteral("clip")}, {QStringLiteral("id"), cid}};
+}
+
+static QString paramValue(const QJsonObject &getReply, int index, const QString &name)
+{
+    const QJsonArray effects = getReply.value(QStringLiteral("result")).toArray();
+    for (const auto &p : effects.at(index).toObject().value(QStringLiteral("params")).toArray()) {
+        if (p.toObject().value(QStringLiteral("name")).toString() == name) {
+            return p.toObject().value(QStringLiteral("value")).toString();
+        }
+    }
+    return QStringLiteral("<missing>");
+}
+
+TEST_CASE("RC effects", "[RemoteControl]")
+{
+    RcFixture f;
+    RemoteControl r;
+    const QJsonObject target = clipTarget(f.cid);
+
+    auto added = rc(r, QStringLiteral("effect.add"), {{QStringLiteral("target"), target}, {QStringLiteral("effectId"), QStringLiteral("sepia")}});
+    REQUIRE(added.value(QStringLiteral("ok")).toBool());
+    REQUIRE(added.value(QStringLiteral("result")).toObject().value(QStringLiteral("index")).toInt() == 0);
+
+    auto got = rc(r, QStringLiteral("effect.get"), {{QStringLiteral("target"), target}});
+    REQUIRE(got.value(QStringLiteral("result")).toArray().size() == 1);
+    REQUIRE(got.value(QStringLiteral("result")).toArray().at(0).toObject().value(QStringLiteral("effectId")).toString() == QStringLiteral("sepia"));
+    const QString before = paramValue(got, 0, QStringLiteral("u"));
+    REQUIRE(before != QStringLiteral("<missing>"));
+
+    SECTION("set and undo a parameter")
+    {
+        auto set = rc(r, QStringLiteral("effect.set"),
+                      {{QStringLiteral("target"), target},
+                       {QStringLiteral("index"), 0},
+                       {QStringLiteral("params"), QJsonObject{{QStringLiteral("u"), QStringLiteral("100")}}}});
+        REQUIRE(set.value(QStringLiteral("ok")).toBool());
+        REQUIRE(paramValue(rc(r, QStringLiteral("effect.get"), {{QStringLiteral("target"), target}}), 0, QStringLiteral("u")) == QStringLiteral("100"));
+        f.undoStack->undo();
+        REQUIRE(paramValue(rc(r, QStringLiteral("effect.get"), {{QStringLiteral("target"), target}}), 0, QStringLiteral("u")) == before);
+    }
+
+    SECTION("errors")
+    {
+        REQUIRE(errCode(rc(r, QStringLiteral("effect.add"),
+                           {{QStringLiteral("target"), target}, {QStringLiteral("effectId"), QStringLiteral("no_such_fx")}})) == QStringLiteral("not_found"));
+        REQUIRE(errCode(rc(r, QStringLiteral("effect.set"),
+                           {{QStringLiteral("target"), target},
+                            {QStringLiteral("index"), 5},
+                            {QStringLiteral("params"), QJsonObject{{QStringLiteral("u"), QStringLiteral("1")}}}})) == QStringLiteral("bad_params"));
+        REQUIRE(errCode(rc(r, QStringLiteral("effect.set"),
+                           {{QStringLiteral("target"), target},
+                            {QStringLiteral("index"), 0},
+                            {QStringLiteral("params"), QJsonObject{{QStringLiteral("nope"), QStringLiteral("1")}}}})) == QStringLiteral("bad_params"));
+        REQUIRE(f.timeline->requestItemDeletion(f.cid));
+        REQUIRE(errCode(rc(r, QStringLiteral("effect.get"), {{QStringLiteral("target"), target}})) == QStringLiteral("not_found"));
+    }
+}

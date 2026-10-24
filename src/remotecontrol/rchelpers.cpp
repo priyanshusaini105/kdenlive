@@ -3,7 +3,10 @@
 */
 
 #include "rchelpers.h"
+#include "bin/projectclip.h"
+#include "bin/projectitemmodel.h"
 #include "core.h"
+#include "effects/effectstack/model/effectstackmodel.hpp"
 #include "project/projectmanager.h"
 #include "timeline2/model/timelineitemmodel.hpp"
 
@@ -99,4 +102,34 @@ std::optional<int> rcTrack(const std::shared_ptr<TimelineItemModel> &tl, const Q
         return std::nullopt;
     }
     return id;
+}
+
+std::shared_ptr<EffectStackModel> rcEffectStack(const QJsonObject &target, RcReply &err)
+{
+    const QString type = target.value(QStringLiteral("type")).toString();
+    if (type == QLatin1String("bin")) {
+        auto binId = rcString(target, "id", err);
+        if (!binId) return nullptr;
+        auto clip = pCore->projectItemModel()->getClipByBinID(*binId);
+        if (!clip) {
+            err = rcFail(QStringLiteral("not_found"), QStringLiteral("no bin clip with id %1").arg(*binId));
+            return nullptr;
+        }
+        return clip->getEffectStack();
+    }
+    auto tl = rcTimeline(err);
+    if (!tl) return nullptr;
+    if (type == QLatin1String("master")) {
+        return tl->getMasterEffectStackModel();
+    }
+    if (type == QLatin1String("clip")) {
+        auto cid = rcClip(tl, target, err, "id");
+        return cid ? tl->getClipEffectStackModel(*cid) : nullptr;
+    }
+    if (type == QLatin1String("track")) {
+        auto tid = rcTrack(tl, target, err, "id");
+        return tid ? tl->getTrackEffectStackModel(*tid) : nullptr;
+    }
+    err = rcFail(QStringLiteral("bad_params"), QStringLiteral("target.type must be clip, track, master or bin"));
+    return nullptr;
 }

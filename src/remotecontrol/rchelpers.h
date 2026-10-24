@@ -10,6 +10,7 @@
 #include <optional>
 
 class TimelineItemModel;
+class EffectStackModel;
 
 /* All helpers return std::nullopt / nullptr and fill `err` on failure.
  * Kdenlive is built without exceptions: validate before touching any model getter. */
@@ -19,3 +20,5 @@ std::optional<double> rcDouble(const QJsonObject &p, const char *key, RcReply &e
 std::optional<QString> rcString(const QJsonObject &p, const char *key, RcReply &err, std::optional<QString> def = {});
 std::optional<int> rcClip(const std::shared_ptr<TimelineItemModel> &tl, const QJsonObject &p, RcReply &err, const char *key = "clipId");
 std::optional<int> rcTrack(const std::shared_ptr<TimelineItemModel> &tl, const QJsonObject &p, RcReply &err, const char *key = "trackId");
+/** @brief Resolve an effect target {type: clip|track|master|bin, id}. */
+std::shared_ptr<EffectStackModel> rcEffectStack(const QJsonObject &target, RcReply &err);

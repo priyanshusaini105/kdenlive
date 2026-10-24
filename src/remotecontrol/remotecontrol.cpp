@@ -14,6 +14,7 @@ RemoteControl::RemoteControl(QObject *parent)
 {
     registerTimelineCommands(m_registry);
     registerUndoCommands(m_registry, this);
+    registerEffectCommands(m_registry);
     m_idle.setSingleShot(true);
     m_idle.setInterval(10000);
     connect(&m_idle, &QTimer::timeout, this, &RemoteControl::endGroup);

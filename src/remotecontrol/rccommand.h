@@ -48,3 +48,4 @@ class RemoteControl;
 
 void registerTimelineCommands(RcRegistry &r);
 void registerUndoCommands(RcRegistry &r, RemoteControl *rc);
+void registerEffectCommands(RcRegistry &r);
