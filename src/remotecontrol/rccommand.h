@@ -54,3 +54,4 @@ void registerClipCommands(RcRegistry &r);
 void registerTrackCommands(RcRegistry &r);
 void registerMarkerCommands(RcRegistry &r);
 void registerMonitorCommands(RcRegistry &r);
+void registerAssetCommands(RcRegistry &r);

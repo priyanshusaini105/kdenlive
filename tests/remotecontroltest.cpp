@@ -416,3 +416,35 @@ TEST_CASE("RC monitor needs the GUI", "[RemoteControl]")
     REQUIRE(errCode(rc(r, QStringLiteral("monitor.play"), {{QStringLiteral("play"), true}})) == QStringLiteral("no_gui"));
     REQUIRE(errCode(rc(r, QStringLiteral("monitor.position"))) == QStringLiteral("no_gui"));
 }
+
+TEST_CASE("RC asset catalog", "[RemoteControl]")
+{
+    RemoteControl r;
+    const QJsonArray effects =
+        rc(r, QStringLiteral("asset.list"), {{QStringLiteral("kind"), QStringLiteral("effect")}, {QStringLiteral("filter"), QStringLiteral("sepia")}})
+            .value(QStringLiteral("result"))
+            .toArray();
+    bool hasSepia = false;
+    for (const auto &e : effects) {
+        hasSepia |= e.toObject().value(QStringLiteral("id")).toString() == QStringLiteral("sepia");
+    }
+    REQUIRE(hasSepia);
+    REQUIRE(!rc(r, QStringLiteral("asset.list"), {{QStringLiteral("kind"), QStringLiteral("transition")}}).value(QStringLiteral("result")).toArray().isEmpty());
+
+    const QJsonObject schema =
+        rc(r, QStringLiteral("asset.schema"), {{QStringLiteral("kind"), QStringLiteral("effect")}, {QStringLiteral("id"), QStringLiteral("sepia")}})
+            .value(QStringLiteral("result"))
+            .toObject();
+    bool hasU = false;
+    for (const auto &p : schema.value(QStringLiteral("params")).toArray()) {
+        if (p.toObject().value(QStringLiteral("name")).toString() == QStringLiteral("u")) {
+            hasU = true;
+            REQUIRE(p.toObject().value(QStringLiteral("animated")).toBool());
+            REQUIRE(p.toObject().value(QStringLiteral("default")).toString() == QStringLiteral("75"));
+        }
+    }
+    REQUIRE(hasU);
+    REQUIRE(errCode(rc(r, QStringLiteral("asset.schema"),
+                       {{QStringLiteral("kind"), QStringLiteral("effect")}, {QStringLiteral("id"), QStringLiteral("nope")}})) == QStringLiteral("not_found"));
+    REQUIRE(errCode(rc(r, QStringLiteral("asset.list"), {{QStringLiteral("kind"), QStringLiteral("filter")}})) == QStringLiteral("bad_params"));
+}

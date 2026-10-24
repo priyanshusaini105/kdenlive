@@ -3,6 +3,7 @@
 set(kdenlive_SRCS
   ${kdenlive_SRCS}
   remotecontrol/commands_action.cpp
+  remotecontrol/commands_asset.cpp
   remotecontrol/commands_clip.cpp
   remotecontrol/commands_effect.cpp
   remotecontrol/commands_marker.cpp
