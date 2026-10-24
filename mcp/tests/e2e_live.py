@@ -30,18 +30,21 @@ async def main() -> None:
     kd = Kdenlive()
     tl = await kd.call("timeline.get")
     assert tl["clips"], "load a clip onto the timeline first"
-    clip = tl["clips"][0]
+    audio_tracks = {t["id"] for t in tl["tracks"] if t["audio"]}
+    video = [c for c in tl["clips"] if c["trackId"] not in audio_tracks]
+    clip = (video or tl["clips"])[0]
+    effect = "sepia" if video else "volume"
     start_count = len(tl["clips"])
 
     await kd.call("undo.begin", {"label": "e2e"})
     cut = await kd.call("clip.cut", {"clipId": clip["id"], "position": clip["position"] + 125})
     right = {"type": "clip", "id": cut["rightId"]}
-    await kd.call("effect.add", {"target": right, "effectId": "sepia"})
+    await kd.call("effect.add", {"target": right, "effectId": effect})
     await kd.call("undo.end")
 
     tl = await kd.call("timeline.get")
     assert len(tl["clips"]) == start_count + 1
-    assert [e["effectId"] for e in await kd.call("effect.get", {"target": right})] == ["sepia"]
+    assert [e["effectId"] for e in await kd.call("effect.get", {"target": right})] == [effect]
 
     await kd.call("undo")
     tl = await kd.call("timeline.get")
@@ -51,7 +54,7 @@ async def main() -> None:
     tl = await kd.call("timeline.get")
     assert len(tl["clips"]) == start_count + 1
     right_now = next(c for c in tl["clips"] if c["position"] == clip["position"] + 125 and c["trackId"] == clip["trackId"])
-    assert [e["effectId"] for e in await kd.call("effect.get", {"target": {"type": "clip", "id": right_now["id"]}})] == ["sepia"]
+    assert [e["effectId"] for e in await kd.call("effect.get", {"target": {"type": "clip", "id": right_now["id"]}})] == [effect]
 
     assert await kd.call("action.list", {"filter": "razor"}), "razor action missing"
     print("E2E OK")
