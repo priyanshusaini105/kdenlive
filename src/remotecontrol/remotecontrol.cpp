@@ -17,6 +17,7 @@ RemoteControl::RemoteControl(QObject *parent)
     registerEffectCommands(m_registry);
     registerActionCommands(m_registry);
     registerClipCommands(m_registry);
+    registerTrackCommands(m_registry);
     m_idle.setSingleShot(true);
     m_idle.setInterval(10000);
     connect(&m_idle, &QTimer::timeout, this, &RemoteControl::endGroup);

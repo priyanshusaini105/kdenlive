@@ -326,3 +326,46 @@ TEST_CASE("RC clip editing", "[RemoteControl]")
         REQUIRE(errCode(rc(r, QStringLiteral("group.create"), {{QStringLiteral("ids"), QJsonArray{f.cid, 9999}}})) == QStringLiteral("not_found"));
     }
 }
+
+static QJsonObject trackOf(RemoteControl &r, int tid)
+{
+    for (const auto &t : rc(r, QStringLiteral("timeline.get")).value(QStringLiteral("result")).toObject().value(QStringLiteral("tracks")).toArray()) {
+        if (t.toObject().value(QStringLiteral("id")).toInt() == tid) return t.toObject();
+    }
+    return {};
+}
+
+TEST_CASE("RC tracks", "[RemoteControl]")
+{
+    RcFixture f;
+    RemoteControl r;
+    auto ok = [](const QJsonObject &o) { return o.value(QStringLiteral("ok")).toBool(); };
+
+    auto added = rc(r, QStringLiteral("track.add"), {{QStringLiteral("audio"), true}, {QStringLiteral("name"), QStringLiteral("Music")}});
+    REQUIRE(ok(added));
+    const int atid = added.value(QStringLiteral("result")).toObject().value(QStringLiteral("trackId")).toInt();
+    REQUIRE(trackOf(r, atid).value(QStringLiteral("audio")).toBool());
+
+    REQUIRE(ok(rc(r, QStringLiteral("track.rename"), {{QStringLiteral("trackId"), atid}, {QStringLiteral("name"), QStringLiteral("Score")}})));
+    REQUIRE(trackOf(r, atid).value(QStringLiteral("name")).toString().contains(QStringLiteral("Score")));
+
+    REQUIRE(ok(rc(r, QStringLiteral("track.lock"), {{QStringLiteral("trackId"), f.tid}, {QStringLiteral("locked"), true}})));
+    REQUIRE(trackOf(r, f.tid).value(QStringLiteral("locked")).toBool());
+    f.undoStack->undo();
+    REQUIRE(!trackOf(r, f.tid).value(QStringLiteral("locked")).toBool());
+
+    REQUIRE(ok(rc(r, QStringLiteral("track.hide"), {{QStringLiteral("trackId"), f.tid}, {QStringLiteral("hidden"), true}})));
+    REQUIRE(trackOf(r, f.tid).value(QStringLiteral("hidden")).toBool());
+    f.undoStack->undo();
+    REQUIRE(!trackOf(r, f.tid).value(QStringLiteral("hidden")).toBool());
+    REQUIRE(errCode(rc(r, QStringLiteral("track.hide"), {{QStringLiteral("trackId"), atid}, {QStringLiteral("hidden"), true}})) ==
+            QStringLiteral("bad_params"));
+
+    REQUIRE(ok(rc(r, QStringLiteral("track.mute"), {{QStringLiteral("trackId"), atid}, {QStringLiteral("muted"), true}})));
+    REQUIRE(trackOf(r, atid).value(QStringLiteral("muted")).toBool());
+
+    REQUIRE(ok(rc(r, QStringLiteral("track.delete"), {{QStringLiteral("trackId"), atid}})));
+    REQUIRE(trackOf(r, atid).isEmpty());
+    REQUIRE(errCode(rc(r, QStringLiteral("track.rename"), {{QStringLiteral("trackId"), atid}, {QStringLiteral("name"), QStringLiteral("x")}})) ==
+            QStringLiteral("not_found"));
+}

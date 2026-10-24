@@ -51,3 +51,4 @@ void registerUndoCommands(RcRegistry &r, RemoteControl *rc);
 void registerEffectCommands(RcRegistry &r);
 void registerActionCommands(RcRegistry &r);
 void registerClipCommands(RcRegistry &r);
+void registerTrackCommands(RcRegistry &r);
