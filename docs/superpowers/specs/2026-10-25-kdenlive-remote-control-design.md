@@ -91,12 +91,13 @@ Claude Code ──MCP(stdio)──▶ kdenlive-mcp (Python) ──D-Bus session�
     `{"ok":true,"result":…}` or `{"ok":false,"error":{"code","message"}}`.
   - `QString listCommands()` returns each command's name, a one-line description, and its parameters.
   - Why: dozens of operations without D-Bus type marshalling; one place for
-    validation, exception catching (`std::out_of_range` etc.) and undo grouping; new
-    commands need no interface changes.
+    validation and undo grouping; new commands need no interface changes.
+  - Kdenlive builds with `-fno-exceptions`, so nothing can be caught. Every id and
+    parameter is validated **before** any model call, and errors are return values.
 - **Units are frames** at the D-Bus layer. Positions inside an effect are item-local
   (relative to the clip's in point), matching Kdenlive's own keyframe positions.
-- **Undo:** each mutating command is one undo step, labelled
-  (`pCore->pushUndo(undo, redo, "AI: <command>")`). Commands use model-level
+- **Undo:** each mutating command is one undo step, using Kdenlive's own undo
+  labels. Groups are labelled `AI: <label>` (see below). Commands use model-level
   functions with `Fun& undo, Fun& redo`, or ones that push their own undo.
   - Known exceptions with no undo in Kdenlive itself: mixer volume/pan, profile
     switch, subtitle import. Each must be flagged `undoable:false` in `listCommands`.
