@@ -622,3 +622,66 @@ TEST_CASE("RC refuses calls while a modal dialog is open", "[RemoteControl]")
     QApplication::processEvents();
     REQUIRE(rc(r, QStringLiteral("timeline.get")).value(QStringLiteral("ok")).toBool());
 }
+
+TEST_CASE("RC bin", "[RemoteControl]")
+{
+    RcFixture f;
+    RemoteControl r;
+    auto ok = [](const QJsonObject &o) { return o.value(QStringLiteral("ok")).toBool(); };
+    auto binClips = [&]() { return rc(r, QStringLiteral("bin.list")).value(QStringLiteral("result")).toObject().value(QStringLiteral("clips")).toArray(); };
+    auto clipById = [&](const QString &id) {
+        for (const auto &c : binClips()) {
+            if (c.toObject().value(QStringLiteral("binId")).toString() == id) return c.toObject();
+        }
+        return QJsonObject();
+    };
+
+    REQUIRE(!clipById(f.binId).isEmpty());
+    REQUIRE(errCode(rc(r, QStringLiteral("bin.import"), {{QStringLiteral("paths"), QJsonArray{QStringLiteral("/nonexistent/x.mp4")}}})) ==
+            QStringLiteral("not_found"));
+
+    auto imported = rc(r, QStringLiteral("bin.import"), {{QStringLiteral("paths"), QJsonArray{QString(sourcesPath + QStringLiteral("/dataset/blue.mp4"))}}});
+    REQUIRE(ok(imported));
+    const QString importedId = imported.value(QStringLiteral("result")).toObject().value(QStringLiteral("binIds")).toArray().at(0).toString();
+    REQUIRE(!clipById(importedId).isEmpty());
+
+    auto color = rc(r, QStringLiteral("bin.color"),
+                    {{QStringLiteral("color"), QStringLiteral("#ff0000")}, {QStringLiteral("duration"), 50}, {QStringLiteral("name"), QStringLiteral("Red")}});
+    REQUIRE(ok(color));
+    const QString colorId = color.value(QStringLiteral("result")).toObject().value(QStringLiteral("binId")).toString();
+    for (int i = 0; i < 100 && !clipById(colorId).value(QStringLiteral("ready")).toBool(); ++i) {
+        waitMs(20); // clips load asynchronously, as the MCP side polls 'ready'
+    }
+    REQUIRE(clipById(colorId).value(QStringLiteral("duration")).toInt() == 50);
+
+    auto folder = rc(r, QStringLiteral("bin.folder.create"), {{QStringLiteral("name"), QStringLiteral("Music")}});
+    REQUIRE(ok(folder));
+    const QString folderId = folder.value(QStringLiteral("result")).toObject().value(QStringLiteral("folderId")).toString();
+    bool hasFolder = false;
+    for (const auto &fo : rc(r, QStringLiteral("bin.list")).value(QStringLiteral("result")).toObject().value(QStringLiteral("folders")).toArray()) {
+        hasFolder |= fo.toObject().value(QStringLiteral("id")).toString() == folderId &&
+                     fo.toObject().value(QStringLiteral("name")).toString() == QStringLiteral("Music");
+    }
+    REQUIRE(hasFolder);
+
+    // clip renames go through the Bin widget (absent headless); folder renames don't
+    REQUIRE(errCode(rc(r, QStringLiteral("bin.rename"), {{QStringLiteral("binId"), colorId}, {QStringLiteral("name"), QStringLiteral("Crimson")}})) ==
+            QStringLiteral("no_gui"));
+    REQUIRE(ok(rc(r, QStringLiteral("bin.rename"), {{QStringLiteral("binId"), folderId}, {QStringLiteral("name"), QStringLiteral("Score")}})));
+    bool renamed = false;
+    for (const auto &fo : rc(r, QStringLiteral("bin.list")).value(QStringLiteral("result")).toObject().value(QStringLiteral("folders")).toArray()) {
+        renamed |= fo.toObject().value(QStringLiteral("name")).toString() == QStringLiteral("Score");
+    }
+    REQUIRE(renamed);
+
+    REQUIRE(rc(r, QStringLiteral("bin.properties.get"), {{QStringLiteral("binId"), colorId}, {QStringLiteral("keys"), QJsonArray{QStringLiteral("resource")}}})
+                .value(QStringLiteral("result"))
+                .toObject()
+                .contains(QStringLiteral("resource")));
+
+    REQUIRE(ok(rc(r, QStringLiteral("bin.delete"), {{QStringLiteral("binId"), colorId}})));
+    REQUIRE(clipById(colorId).isEmpty());
+    f.undoStack->undo();
+    REQUIRE(!clipById(colorId).isEmpty());
+    REQUIRE(errCode(rc(r, QStringLiteral("bin.delete"), {{QStringLiteral("binId"), QStringLiteral("9999")}})) == QStringLiteral("not_found"));
+}
