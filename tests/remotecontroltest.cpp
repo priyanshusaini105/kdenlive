@@ -14,9 +14,11 @@
 #include <QDialog>
 #include <QDomDocument>
 #include <QEventLoop>
+#include <QFileInfo>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QTemporaryDir>
 #include <QTimer>
 
 static QJsonObject rc(RemoteControl &r, const QString &cmd, const QJsonObject &p = {})
@@ -748,4 +750,46 @@ TEST_CASE("RC titles", "[RemoteControl]")
                 QStringLiteral("bad_params"));
         REQUIRE(errCode(rc(r, QStringLiteral("title.xml"), {{QStringLiteral("binId"), f.binId}})) == QStringLiteral("bad_params")); // not a title
     }
+}
+
+TEST_CASE("RC subtitles", "[RemoteControl]")
+{
+    RcFixture f;
+    RemoteControl r;
+    auto ok = [](const QJsonObject &o) { return o.value(QStringLiteral("ok")).toBool(); };
+    auto subs = [&]() { return rc(r, QStringLiteral("subtitle.list")).value(QStringLiteral("result")).toArray(); };
+
+    auto added = rc(r, QStringLiteral("subtitle.add"),
+                    {{QStringLiteral("start"), 25}, {QStringLiteral("end"), 75}, {QStringLiteral("text"), QStringLiteral("héllo ✓")}});
+    REQUIRE(ok(added));
+    const int sid = added.value(QStringLiteral("result")).toObject().value(QStringLiteral("id")).toInt();
+    REQUIRE(subs().size() == 1);
+    const QJsonObject s0 = subs().at(0).toObject();
+    REQUIRE(s0.value(QStringLiteral("text")).toString() == QStringLiteral("héllo ✓"));
+    REQUIRE(s0.value(QStringLiteral("start")).toInt() == 25);
+    REQUIRE(s0.value(QStringLiteral("end")).toInt() == 75);
+    REQUIRE(s0.value(QStringLiteral("id")).toInt() == sid);
+
+    REQUIRE(ok(
+        rc(r, QStringLiteral("subtitle.edit"), {{QStringLiteral("id"), sid}, {QStringLiteral("text"), QStringLiteral("bye")}, {QStringLiteral("end"), 100}})));
+    REQUIRE(subs().at(0).toObject().value(QStringLiteral("text")).toString() == QStringLiteral("bye"));
+    REQUIRE(subs().at(0).toObject().value(QStringLiteral("end")).toInt() == 100);
+    f.undoStack->undo(); // one step for the whole edit
+    REQUIRE(subs().at(0).toObject().value(QStringLiteral("text")).toString() == QStringLiteral("héllo ✓"));
+    REQUIRE(subs().at(0).toObject().value(QStringLiteral("end")).toInt() == 75);
+
+    QTemporaryDir dir;
+    const QString out = dir.filePath(QStringLiteral("subs.srt"));
+    REQUIRE(ok(rc(r, QStringLiteral("subtitle.export"), {{QStringLiteral("path"), out}})));
+    REQUIRE(QFileInfo(out).size() > 0);
+
+    REQUIRE(errCode(rc(r, QStringLiteral("subtitle.import"), {{QStringLiteral("path"), QStringLiteral("/nonexistent.srt")}})) == QStringLiteral("not_found"));
+    REQUIRE(!rc(r, QStringLiteral("subtitle.styles")).value(QStringLiteral("result")).toArray().isEmpty());
+
+    REQUIRE(ok(rc(r, QStringLiteral("subtitle.delete"), {{QStringLiteral("id"), sid}})));
+    REQUIRE(subs().isEmpty());
+    REQUIRE(errCode(rc(r, QStringLiteral("subtitle.delete"), {{QStringLiteral("id"), sid}})) == QStringLiteral("not_found"));
+    REQUIRE(errCode(rc(r, QStringLiteral("subtitle.add"),
+                       {{QStringLiteral("start"), 50}, {QStringLiteral("end"), 10}, {QStringLiteral("text"), QStringLiteral("x")}})) ==
+            QStringLiteral("bad_params"));
 }
