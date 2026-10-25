@@ -1,0 +1,144 @@
+/*
+    SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-KDE-Accepted-GPL
+*/
+
+#include "remotecontrol.h"
+#include "core.h"
+#include "doc/docundostack.hpp"
+#include "timeline2/model/timelineitemmodel.hpp"
+#include "timeline2/model/trackmodel.hpp"
+
+#include <QApplication>
+#include <QJsonArray>
+#include <QJsonDocument>
+
+RemoteControl::RemoteControl(QObject *parent)
+    : QObject(parent)
+{
+    registerTimelineCommands(m_registry);
+    registerUndoCommands(m_registry, this);
+    registerEffectCommands(m_registry);
+    registerActionCommands(m_registry);
+    registerClipCommands(m_registry);
+    registerTrackCommands(m_registry);
+    registerMarkerCommands(m_registry);
+    registerMonitorCommands(m_registry);
+    registerAssetCommands(m_registry);
+    registerCompositionCommands(m_registry);
+    registerBinCommands(m_registry);
+    registerTitleCommands(m_registry);
+    registerSubtitleCommands(m_registry);
+    registerMixerCommands(m_registry);
+    registerProjectCommands(m_registry);
+    registerRenderCommands(m_registry);
+    m_idle.setSingleShot(true);
+    m_idle.setInterval(10000);
+    connect(&m_idle, &QTimer::timeout, this, &RemoteControl::endGroup);
+}
+
+std::shared_ptr<TrackModel> RemoteControl::track(const std::shared_ptr<TimelineItemModel> &tl, int tid)
+{
+    return tl->getTrackById_const(tid);
+}
+
+void RemoteControl::setIdleTimeoutMs(int ms)
+{
+    m_idle.setInterval(ms);
+}
+
+bool RemoteControl::groupOpen() const
+{
+    return m_groupOpen;
+}
+
+void RemoteControl::beginGroup(const QString &label)
+{
+    auto stack = pCore->undoStack();
+    stack->beginMacro(QStringLiteral("AI: ") + label);
+    m_groupStack = stack;
+    m_groupMacro = stack->command(stack->count() - 1); // QUndoStack appends an open macro immediately
+    m_groupOpen = true;
+    m_idle.start();
+}
+
+void RemoteControl::endGroup()
+{
+    m_idle.stop();
+    if (m_groupOpen) {
+        m_groupOpen = false;
+        auto stack = m_groupStack.lock();
+        const QUndoCommand *macro = m_groupMacro;
+        m_groupStack.reset();
+        m_groupMacro = nullptr;
+        // Only touch the stack if our macro is still its open last command: a project switch or timeline close may have replaced or cleared it.
+        if (!stack || stack != pCore->undoStack() || stack->count() == 0 || stack->command(stack->count() - 1) != macro) {
+            return;
+        }
+        stack->endMacro();
+        // A group in which every command failed would leave a no-op entry that swallows the user's next Ctrl+Z.
+        if (stack->command(stack->index() - 1) == macro && macro->childCount() == 0) {
+            const_cast<QUndoCommand *>(macro)->setObsolete(true);
+            stack->undo(); // obsolete commands are dropped from the stack when undone
+        }
+    }
+}
+
+static QString toJson(const QJsonObject &o)
+{
+    return QString::fromUtf8(QJsonDocument(o).toJson(QJsonDocument::Compact));
+}
+
+static QString replyJson(const RcReply &r)
+{
+    if (r.ok()) {
+        return toJson({{QStringLiteral("ok"), true}, {QStringLiteral("result"), r.result}});
+    }
+    return toJson(
+        {{QStringLiteral("ok"), false}, {QStringLiteral("error"), QJsonObject{{QStringLiteral("code"), r.code}, {QStringLiteral("message"), r.message}}}});
+}
+
+QString RemoteControl::call(const QString &command, const QString &paramsJson)
+{
+    QJsonParseError parseError;
+    const QJsonDocument doc = QJsonDocument::fromJson(paramsJson.toUtf8(), &parseError);
+    if (parseError.error != QJsonParseError::NoError || !doc.isObject()) {
+        return replyJson(rcFail(QStringLiteral("bad_json"), QStringLiteral("params must be a JSON object")));
+    }
+    if (m_groupOpen) {
+        // Any AI activity keeps the group alive; silence closes it so user edits stay separate.
+        m_idle.start();
+    }
+    if (QApplication::activeModalWidget()) {
+        // We would run inside the dialog's nested event loop; re-entering Kdenlive there crashes it (seen with the backup-recovery prompt).
+        return replyJson(rcFail(QStringLiteral("failed"), QStringLiteral("a dialog is open in Kdenlive; ask the user to close it, then retry")));
+    }
+    auto it = m_registry.constFind(command);
+    if (it == m_registry.constEnd()) {
+        return replyJson(rcFail(QStringLiteral("unknown_command"), QStringLiteral("unknown command '%1'; see listCommands").arg(command)));
+    }
+    if (it->needsGui && !pCore->window()) {
+        return replyJson(rcFail(QStringLiteral("no_gui"), QStringLiteral("'%1' needs the Kdenlive window").arg(command)));
+    }
+    return replyJson(it->run(doc.object()));
+}
+
+QString RemoteControl::listCommands()
+{
+    QJsonArray list;
+    for (const RcCommand &c : std::as_const(m_registry)) {
+        QJsonArray params;
+        for (const RcParam &p : c.params) {
+            params.append(QJsonObject{{QStringLiteral("name"), p.name},
+                                      {QStringLiteral("type"), p.type},
+                                      {QStringLiteral("required"), p.required},
+                                      {QStringLiteral("description"), p.description}});
+        }
+        list.append(QJsonObject{{QStringLiteral("name"), c.name},
+                                {QStringLiteral("description"), c.description},
+                                {QStringLiteral("params"), params},
+                                {QStringLiteral("mutating"), c.mutating},
+                                {QStringLiteral("undoable"), c.undoable},
+                                {QStringLiteral("needsGui"), c.needsGui}});
+    }
+    return QString::fromUtf8(QJsonDocument(list).toJson(QJsonDocument::Compact));
+}
