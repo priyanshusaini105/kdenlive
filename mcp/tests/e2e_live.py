@@ -95,6 +95,25 @@ async def main() -> None:
     assert (back["position"], back["duration"]) == (clip["position"], clip["duration"]), back
     assert not any(m["comment"] == "e2e" for m in await kd.call("marker.list", {"scope": "guides"}))
 
+    # Phase 3: effect lookup, smooth keyframe, same-track dissolve as one undo step
+    assert any(e["id"] == "sepia" for e in await kd.call("asset.list", {"kind": "effect", "filter": "sepia"}))
+    assert any(p["name"] == "u" and p["animated"] for p in (await kd.call("asset.schema", {"kind": "effect", "id": "sepia"}))["params"])
+    count = len((await kd.call("timeline.get"))["clips"])
+    await kd.call("undo.begin", {"label": "e2e phase 3"})
+    cut = await kd.call("clip.cut", {"clipId": clip["id"], "position": mid})
+    target = {"type": "clip", "id": clip["id"]}
+    index = (await kd.call("effect.add", {"target": target, "effectId": "sepia"}))["index"]
+    await kd.call("keyframe.set", {"target": target, "index": index, "param": "u", "frame": 10, "value": "200", "interp": "smooth"})
+    await kd.call("mix.add", {"clipId": cut["rightId"]})
+    await kd.call("undo.end")
+    tl = await kd.call("timeline.get")
+    assert any(m["clipId"] == cut["rightId"] for m in tl["mixes"]), tl["mixes"]
+    keys = await kd.call("keyframe.list", {"target": target, "index": index, "param": "u"})
+    assert any(k["frame"] == 10 and k["interp"] == "smooth" for k in keys), keys
+    await kd.call("undo")
+    tl = await kd.call("timeline.get")
+    assert len(tl["clips"]) == count and not tl["mixes"], "phase 3 undo should revert cut, effect, keyframe and mix"
+
     await kd.call("monitor.seek", {"position": 30})
 
     async def seeked():

@@ -103,7 +103,10 @@ async def cut_at(time: str | int | None = None, track_id: int | None = None) -> 
     new_ids = []
     async with step("cut"):
         for c in targets:
-            new_ids.append((await call("clip.cut", {"clipId": c["id"], "position": t}))["rightId"])
+            # Cutting a grouped clip also cuts its partners, so skip targets that no longer span t.
+            current = next((x for x in (await call("timeline.get"))["clips"] if x["id"] == c["id"]), None)
+            if current and current["position"] < t < current["position"] + current["duration"]:
+                new_ids.append((await call("clip.cut", {"clipId": c["id"], "position": t}))["rightId"])
     return new_ids
 
 
@@ -304,6 +307,109 @@ async def select(clip_ids: list[int]) -> str:
     """Select clips in the timeline."""
     await call("timeline.select", {"ids": clip_ids})
     return "ok"
+
+
+@server.tool()
+async def list_effects(filter: str | None = None, audio: bool | None = None) -> list[dict]:
+    """Search available effects by id/name substring; audio filters audio (true) or video (false) effects."""
+    params: dict[str, Any] = {"kind": "effect"}
+    if filter:
+        params["filter"] = filter
+    if audio is not None:
+        params["audio"] = audio
+    return await call("asset.list", params)
+
+
+@server.tool()
+async def effect_schema(effect_id: str) -> dict:
+    """Parameters of an effect: names, types, defaults, ranges, and whether they can be keyframed."""
+    return await call("asset.schema", {"kind": "effect", "id": effect_id})
+
+
+@server.tool()
+async def list_transitions(filter: str | None = None) -> list[dict]:
+    """Available transitions/compositions; composition=true ones go between tracks, others are same-track mixes."""
+    params: dict[str, Any] = {"kind": "transition"}
+    if filter:
+        params["filter"] = filter
+    return await call("asset.list", params)
+
+
+@server.tool()
+async def get_effects(clip_id: int | None = None, track_id: int | None = None, master: bool = False) -> list:
+    """Effect stack with parameter values (default: first selected clip)."""
+    return await call("effect.get", {"target": (await _targets(clip_id, track_id, master))[0]})
+
+
+@server.tool()
+async def remove_effect(index: int, clip_id: int | None = None, track_id: int | None = None, master: bool = False) -> str:
+    """Remove the effect at `index` from a stack."""
+    async with step("remove effect"):
+        for target in await _targets(clip_id, track_id, master):
+            await call("effect.remove", {"target": target, "index": index})
+    return "ok"
+
+
+@server.tool()
+async def move_effect(from_index: int, to_index: int, clip_id: int | None = None, track_id: int | None = None, master: bool = False) -> str:
+    """Reorder an effect in a stack."""
+    async with step("move effect"):
+        for target in await _targets(clip_id, track_id, master):
+            await call("effect.move", {"target": target, "from": from_index, "to": to_index})
+    return "ok"
+
+
+@server.tool()
+async def toggle_effect(index: int, enabled: bool, clip_id: int | None = None, track_id: int | None = None, master: bool = False) -> str:
+    """Enable or bypass an effect."""
+    async with step("toggle effect"):
+        for target in await _targets(clip_id, track_id, master):
+            await call("effect.enable", {"target": target, "index": index, "enabled": enabled})
+    return "ok"
+
+
+@server.tool()
+async def set_keyframe(param: str, time: str | int, value: str | float, effect_index: int, clip_id: int, interp: str | None = None) -> str:
+    """Keyframe an effect parameter on a clip at a TIMELINE time (converted to clip-local). interp: linear, discrete, smooth, cubic_in, … ."""
+    clip = await _clip(clip_id)
+    local = await frames(time, False) - clip["position"]
+    if not 0 <= local < clip["duration"]:
+        raise ToolError(f"time is outside clip {clip_id} ({clip['position']}–{clip['position'] + clip['duration'] - 1})")
+    params: dict[str, Any] = {"target": {"type": "clip", "id": clip_id}, "index": effect_index, "param": param, "frame": local, "value": str(value)}
+    if interp:
+        params["interp"] = interp
+    async with step("keyframe"):
+        await call("keyframe.set", params)
+    return "ok"
+
+
+@server.tool()
+async def add_transition(clip_a: int, clip_b: int, transition_id: str | None = None) -> str:
+    """Transition between two clips: same track → crossfade mix (clips must touch); different tracks → composition over their overlap."""
+    a, b = await _clip(clip_a), await _clip(clip_b)
+    if a["position"] > b["position"]:
+        a, b = b, a
+    async with step("transition"):
+        if a["trackId"] == b["trackId"]:
+            await call("mix.add", {"clipId": b["id"], "transitionId": transition_id or "luma"})
+        else:
+            start = max(a["position"], b["position"])
+            end = min(a["position"] + a["duration"], b["position"] + b["duration"])
+            if end <= start:
+                raise ToolError("the clips do not overlap in time")
+            tl = await call("timeline.get")
+            order = [t["id"] for t in tl["tracks"]]  # top first
+            upper = a if order.index(a["trackId"]) < order.index(b["trackId"]) else b
+            await call("composition.add", {"transitionId": transition_id or "composite", "trackId": upper["trackId"], "position": start, "duration": end - start})
+    return "ok"
+
+
+@server.tool()
+async def add_composition(transition_id: str, track_id: int, start: str | int, end: str | int) -> int:
+    """Add a composition (e.g. composite, wipe, qtblend) on a track over [start, end). Returns its id."""
+    s0, e0 = await frames(start, False), await frames(end, False)
+    async with step("composition"):
+        return (await call("composition.add", {"transitionId": transition_id, "trackId": track_id, "position": s0, "duration": e0 - s0}))["compositionId"]
 
 
 def main() -> None:
