@@ -11,8 +11,10 @@ set(kdenlive_SRCS
   remotecontrol/commands_marker.cpp
   remotecontrol/commands_monitor.cpp
   remotecontrol/commands_timeline.cpp
+  remotecontrol/commands_title.cpp
   remotecontrol/commands_track.cpp
   remotecontrol/commands_undo.cpp
   remotecontrol/rchelpers.cpp
+  remotecontrol/rctitle.cpp
   remotecontrol/remotecontrol.cpp
   PARENT_SCOPE)

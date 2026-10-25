@@ -57,3 +57,4 @@ void registerMonitorCommands(RcRegistry &r);
 void registerAssetCommands(RcRegistry &r);
 void registerCompositionCommands(RcRegistry &r);
 void registerBinCommands(RcRegistry &r);
+void registerTitleCommands(RcRegistry &r);

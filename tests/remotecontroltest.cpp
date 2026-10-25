@@ -7,10 +7,12 @@
 #include "core.h"
 #include "doc/docundostack.hpp"
 #include "doc/kdenlivedoc.h"
+#include "remotecontrol/rctitle.h"
 #include "remotecontrol/remotecontrol.h"
 
 #include <QApplication>
 #include <QDialog>
+#include <QDomDocument>
 #include <QEventLoop>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -684,4 +686,66 @@ TEST_CASE("RC bin", "[RemoteControl]")
     f.undoStack->undo();
     REQUIRE(!clipById(colorId).isEmpty());
     REQUIRE(errCode(rc(r, QStringLiteral("bin.delete"), {{QStringLiteral("binId"), QStringLiteral("9999")}})) == QStringLiteral("not_found"));
+}
+
+TEST_CASE("RC titles", "[RemoteControl]")
+{
+    SECTION("spec to kdenlivetitle xml")
+    {
+        QString error;
+        const QString xml = rcTitleXml(QJsonObject{{QStringLiteral("items"), QJsonArray{QJsonObject{{QStringLiteral("type"), QStringLiteral("text")},
+                                                                                                    {QStringLiteral("text"), QStringLiteral("Hello ✓")},
+                                                                                                    {QStringLiteral("x"), 100},
+                                                                                                    {QStringLiteral("y"), 200}}}}},
+                                       1920, 1080, 125, &error);
+        REQUIRE(error.isEmpty());
+        QDomDocument doc;
+        REQUIRE(bool(doc.setContent(xml)));
+        REQUIRE(doc.documentElement().tagName() == QStringLiteral("kdenlivetitle"));
+        REQUIRE(doc.documentElement().attribute(QStringLiteral("width")) == QStringLiteral("1920"));
+        const QDomNodeList items = doc.elementsByTagName(QStringLiteral("item"));
+        REQUIRE(items.count() == 1);
+        REQUIRE(items.item(0).toElement().attribute(QStringLiteral("type")) == QStringLiteral("QGraphicsTextItem"));
+        const QDomElement content = items.item(0).firstChildElement(QStringLiteral("content"));
+        REQUIRE(content.text() == QStringLiteral("Hello ✓"));
+        REQUIRE(content.attribute(QStringLiteral("font-color")) == QStringLiteral("255,255,255,255"));
+        REQUIRE(items.item(0).firstChildElement(QStringLiteral("position")).attribute(QStringLiteral("x")) == QStringLiteral("100"));
+
+        rcTitleXml(QJsonObject{{QStringLiteral("items"), QJsonArray{QJsonObject{{QStringLiteral("type"), QStringLiteral("blob")}}}}}, 1920, 1080, 125, &error);
+        REQUIRE(!error.isEmpty());
+        rcTitleXml(QJsonObject{{QStringLiteral("items"), QJsonArray{QJsonObject{{QStringLiteral("type"), QStringLiteral("text")},
+                                                                                {QStringLiteral("text"), QStringLiteral("x")},
+                                                                                {QStringLiteral("color"), QStringLiteral("red")}}}}},
+                   1920, 1080, 125, &error);
+        REQUIRE(!error.isEmpty());
+    }
+
+    SECTION("title.create makes a bin clip; title.xml reads it back")
+    {
+        RcFixture f;
+        RemoteControl r;
+        auto created =
+            rc(r, QStringLiteral("title.create"),
+               {{QStringLiteral("name"), QStringLiteral("Intro")},
+                {QStringLiteral("duration"), 50},
+                {QStringLiteral("spec"), QJsonObject{{QStringLiteral("items"), QJsonArray{QJsonObject{{QStringLiteral("type"), QStringLiteral("text")},
+                                                                                                      {QStringLiteral("text"), QStringLiteral("Hi")}}}}}}});
+        REQUIRE(created.value(QStringLiteral("ok")).toBool());
+        const QString binId = created.value(QStringLiteral("result")).toObject().value(QStringLiteral("binId")).toString();
+        auto clip = pCore->projectItemModel()->getClipByBinID(binId);
+        for (int i = 0; i < 100 && !clip->statusReady(); ++i) {
+            waitMs(20);
+        }
+        REQUIRE(clip->statusReady());
+        const QString xml = rc(r, QStringLiteral("title.xml"), {{QStringLiteral("binId"), binId}})
+                                .value(QStringLiteral("result"))
+                                .toObject()
+                                .value(QStringLiteral("xml"))
+                                .toString();
+        REQUIRE(xml.contains(QStringLiteral(">Hi<")));
+        REQUIRE(errCode(rc(r, QStringLiteral("title.create"),
+                           {{QStringLiteral("name"), QStringLiteral("x")}, {QStringLiteral("duration"), 50}, {QStringLiteral("spec"), QJsonObject()}})) ==
+                QStringLiteral("bad_params"));
+        REQUIRE(errCode(rc(r, QStringLiteral("title.xml"), {{QStringLiteral("binId"), f.binId}})) == QStringLiteral("bad_params")); // not a title
+    }
 }

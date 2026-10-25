@@ -26,6 +26,7 @@ RemoteControl::RemoteControl(QObject *parent)
     registerAssetCommands(m_registry);
     registerCompositionCommands(m_registry);
     registerBinCommands(m_registry);
+    registerTitleCommands(m_registry);
     m_idle.setSingleShot(true);
     m_idle.setInterval(10000);
     connect(&m_idle, &QTimer::timeout, this, &RemoteControl::endGroup);
