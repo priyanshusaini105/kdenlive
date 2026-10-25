@@ -12,6 +12,8 @@
 
 class TimelineItemModel;
 class TrackModel;
+class DocUndoStack;
+class QUndoCommand;
 
 /** @class RemoteControl
     @brief JSON command dispatcher exported on D-Bus at /RemoteControl, so external tools (an MCP server) can drive the editor.
@@ -40,4 +42,7 @@ private:
     RcRegistry m_registry;
     QTimer m_idle;
     bool m_groupOpen = false;
+    /** The stack and macro the open group lives in; the document's stack can be replaced or cleared under us. */
+    std::weak_ptr<DocUndoStack> m_groupStack;
+    const QUndoCommand *m_groupMacro = nullptr;
 };

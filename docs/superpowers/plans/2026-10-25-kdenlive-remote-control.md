@@ -34,7 +34,7 @@
 2. **Locked tracks.** Kdenlive refuses edits on a locked track. Expect `ok:false` with `failed` and a message naming the lock, never `ok:true`. The test lives in Task 9.
 3. **User edits while an AI group is open.** The idle auto-close must fire, so the user's next GUI edit is its own undo step. The test lives in Task 2 (short timeout).
 4. **Stock Kdenlive running next to the fork.** Discovery must skip instances without `/RemoteControl`, and pick by `KDENLIVE_PID` when there are several. The test lives in Task 7 (`pick_instance`).
-5. **Non-integer fps (29.97 / 23.976).** Timecode `HH:MM:SS:FF` uses the nominal rate; seconds forms use the real rate. The test lives in Task 7 (timecode tests).
+5. **Non-integer fps (29.97 / 23.976).** Timecodes must match what Kdenlive displays: drop-frame at 29.97, `round((h*3600+m*60+s)*fps)+ff` otherwise (corrected after review; originally "nominal rate"). The test lives in Task 7 (timecode tests).
 
 ---
 

@@ -9,6 +9,7 @@
 #include "doc/kdenlivedoc.h"
 #include "remotecontrol/rctitle.h"
 #include "remotecontrol/remotecontrol.h"
+#include "timeline2/model/clipmodel.hpp"
 
 #include <QApplication>
 #include <QDialog>
@@ -869,4 +870,118 @@ TEST_CASE("RC render", "[RemoteControl]")
                         {QStringLiteral("output"), dir.filePath(QStringLiteral("o.mp4"))},
                         {QStringLiteral("range"), QJsonObject{{QStringLiteral("in"), 10}, {QStringLiteral("out"), 5}}}})) == QStringLiteral("bad_params"));
     REQUIRE(errCode(rc(r, QStringLiteral("render.status"), {{QStringLiteral("jobId"), 9999}})) == QStringLiteral("not_found"));
+}
+
+TEST_CASE("RC review fixes", "[RemoteControl]")
+{
+    RcFixture f;
+    RemoteControl r;
+    auto ok = [](const QJsonObject &o) { return o.value(QStringLiteral("ok")).toBool(); };
+
+    SECTION("an undo group survives its stack being replaced or cleared (no edit is lost)")
+    {
+        REQUIRE(ok(rc(r, QStringLiteral("undo.begin"), {{QStringLiteral("label"), QStringLiteral("x")}})));
+        f.undoStack->clear(); // what closing a timeline / opening a project does to the stack under an open group
+        pCore->pushUndo([]() { return true; }, []() { return true; }, QStringLiteral("real edit"));
+        const int count = f.undoStack->count();
+        REQUIRE(count >= 1);
+        rc(r, QStringLiteral("undo.end"));
+        REQUIRE(f.undoStack->count() == count); // the real edit was not obsoleted away
+        REQUIRE(f.undoStack->index() == count);
+    }
+
+    SECTION("composition.add rejects an out-of-range aTrack")
+    {
+        int tid2;
+        REQUIRE(f.timeline->requestTrackInsertion(-1, tid2));
+        REQUIRE(errCode(rc(r, QStringLiteral("composition.add"),
+                           {{QStringLiteral("transitionId"), QStringLiteral("composite")},
+                            {QStringLiteral("trackId"), tid2},
+                            {QStringLiteral("position"), 0},
+                            {QStringLiteral("duration"), 10},
+                            {QStringLiteral("aTrack"), 999}})) == QStringLiteral("bad_params"));
+    }
+
+    SECTION("the root bin folder cannot be deleted or renamed")
+    {
+        REQUIRE(errCode(rc(r, QStringLiteral("bin.delete"), {{QStringLiteral("binId"), QStringLiteral("-1")}})) == QStringLiteral("bad_params"));
+        REQUIRE(errCode(rc(r, QStringLiteral("bin.rename"),
+                           {{QStringLiteral("binId"), QStringLiteral("-1")}, {QStringLiteral("name"), QStringLiteral("x")}})) == QStringLiteral("bad_params"));
+    }
+
+    SECTION("sequence bin clips are refused by bin.delete")
+    {
+        const QJsonArray seqs = rc(r, QStringLiteral("sequence.list")).value(QStringLiteral("result")).toArray();
+        REQUIRE(!seqs.isEmpty());
+        const QString seqBin = seqs.at(0).toObject().value(QStringLiteral("binId")).toString();
+        REQUIRE(!seqBin.isEmpty());
+        REQUIRE(errCode(rc(r, QStringLiteral("bin.delete"), {{QStringLiteral("binId"), seqBin}})) == QStringLiteral("failed"));
+    }
+
+    SECTION("clip.speed takes a ratio: 2.0 halves the duration")
+    {
+        // generator (color) clips can't be time-warped; use a media clip, as Kdenlive's timewarp test does
+        const QString media = KdenliveTests::createProducerWithSound(pCore->getProjectProfile(), pCore->projectItemModel(), 20);
+        const int cid = ClipModel::construct(f.timeline, media, -1, PlaylistState::VideoOnly);
+        REQUIRE(f.timeline->requestClipMove(cid, f.tid, 300));
+        const int before = f.timeline->getClipPlaytime(cid);
+        auto sped = rc(r, QStringLiteral("clip.speed"), {{QStringLiteral("clipId"), cid}, {QStringLiteral("speed"), 2.0}});
+        INFO(QJsonDocument(sped).toJson(QJsonDocument::Compact).toStdString());
+        REQUIRE(ok(sped));
+        REQUIRE(f.timeline->getClipPlaytime(cid) == before / 2);
+    }
+
+    SECTION("clip.slip slips every member of a group")
+    {
+        int a = f.cid, b;
+        REQUIRE(f.timeline->requestClipInsertion(f.binId, f.tid, 200, b));
+        for (int id : {a, b}) {
+            REQUIRE(f.timeline->requestItemResize(id, 15, true) == 15);
+            REQUIRE(f.timeline->requestItemResize(id, 10, false) == 10);
+        }
+        REQUIRE(f.timeline->requestClipsGroup({a, b}) > -1);
+        const int inBefore = f.timeline->getClipIn(a);
+        REQUIRE(ok(rc(r, QStringLiteral("clip.slip"), {{QStringLiteral("clipId"), a}, {QStringLiteral("offset"), 2}})));
+        REQUIRE(f.timeline->getClipIn(a) != inBefore);
+        REQUIRE(f.timeline->getClipIn(b) == f.timeline->getClipIn(a));
+    }
+
+    SECTION("clip.splitAudio without a target picks an audio track")
+    {
+        int atid;
+        REQUIRE(f.timeline->requestTrackInsertion(-1, atid, QString(), true));
+        // same setup as trimmingtest's "Simple audio split": a sound clip placed video-only
+        const QString av = KdenliveTests::createProducerWithSound(pCore->getProjectProfile(), pCore->projectItemModel());
+        const int cid = ClipModel::construct(f.timeline, av, -1, PlaylistState::VideoOnly);
+        REQUIRE(f.timeline->requestClipMove(cid, f.tid, 300));
+        const int before = clipsOf(r).size();
+        auto split = rc(r, QStringLiteral("clip.splitAudio"), {{QStringLiteral("clipId"), cid}});
+        INFO(QJsonDocument(split).toJson(QJsonDocument::Compact).toStdString());
+        REQUIRE(ok(split));
+        REQUIRE(clipsOf(r).size() == before + 1);
+    }
+
+    SECTION("track.add audio goes below the video tracks")
+    {
+        auto added = rc(r, QStringLiteral("track.add"), {{QStringLiteral("audio"), true}});
+        REQUIRE(ok(added));
+        const int atid = added.value(QStringLiteral("result")).toObject().value(QStringLiteral("trackId")).toInt();
+        REQUIRE(f.timeline->getTrackPosition(atid) < f.timeline->getTrackPosition(f.tid));
+    }
+
+    SECTION("clip.paste from another framerate is refused instead of prompting")
+    {
+        QString xml = rc(r, QStringLiteral("clip.copy"), {{QStringLiteral("clipIds"), QJsonArray{f.cid}}})
+                          .value(QStringLiteral("result"))
+                          .toObject()
+                          .value(QStringLiteral("xml"))
+                          .toString();
+        QDomDocument doc;
+        REQUIRE(bool(doc.setContent(xml)));
+        doc.documentElement().setAttribute(QStringLiteral("fps"), QStringLiteral("50"));
+        auto reply = rc(r, QStringLiteral("clip.paste"),
+                        {{QStringLiteral("xml"), doc.toString()}, {QStringLiteral("trackId"), f.tid}, {QStringLiteral("position"), 500}});
+        REQUIRE(errCode(reply) == QStringLiteral("failed"));
+        REQUIRE(reply.value(QStringLiteral("error")).toObject().value(QStringLiteral("message")).toString().contains(QStringLiteral("fps")));
+    }
 }

@@ -39,3 +39,11 @@ def test_bus_address_falls_back_to_systemd_socket():
 def test_bus_address_none_when_nothing():
     from kdenlive_mcp.bus import session_bus_address
     assert session_bus_address({}, 1000, lambda p: False) is None
+
+
+def test_only_vanished_instances_are_retried():
+    from kdenlive_mcp.bus import should_rediscover
+    assert should_rediscover("org.freedesktop.DBus.Error.ServiceUnknown")
+    assert should_rediscover("org.freedesktop.DBus.Error.NameHasNoOwner")
+    assert not should_rediscover("org.freedesktop.DBus.Error.NoReply")  # slow call: retrying would run it twice
+    assert not should_rediscover("org.freedesktop.DBus.Error.UnknownMethod")

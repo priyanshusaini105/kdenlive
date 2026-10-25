@@ -53,7 +53,10 @@ bool RemoteControl::groupOpen() const
 
 void RemoteControl::beginGroup(const QString &label)
 {
-    pCore->undoStack()->beginMacro(QStringLiteral("AI: ") + label);
+    auto stack = pCore->undoStack();
+    stack->beginMacro(QStringLiteral("AI: ") + label);
+    m_groupStack = stack;
+    m_groupMacro = stack->command(stack->count() - 1); // QUndoStack appends an open macro immediately
     m_groupOpen = true;
     m_idle.start();
 }
@@ -63,12 +66,18 @@ void RemoteControl::endGroup()
     m_idle.stop();
     if (m_groupOpen) {
         m_groupOpen = false;
-        auto stack = pCore->undoStack();
+        auto stack = m_groupStack.lock();
+        const QUndoCommand *macro = m_groupMacro;
+        m_groupStack.reset();
+        m_groupMacro = nullptr;
+        // Only touch the stack if our macro is still its open last command: a project switch or timeline close may have replaced or cleared it.
+        if (!stack || stack != pCore->undoStack() || stack->count() == 0 || stack->command(stack->count() - 1) != macro) {
+            return;
+        }
         stack->endMacro();
         // A group in which every command failed would leave a no-op entry that swallows the user's next Ctrl+Z.
-        auto *macro = const_cast<QUndoCommand *>(stack->command(stack->index() - 1));
-        if (macro && macro->childCount() == 0) {
-            macro->setObsolete(true);
+        if (stack->command(stack->index() - 1) == macro && macro->childCount() == 0) {
+            const_cast<QUndoCommand *>(macro)->setObsolete(true);
             stack->undo(); // obsolete commands are dropped from the stack when undone
         }
     }

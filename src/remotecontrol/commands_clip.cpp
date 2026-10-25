@@ -9,6 +9,7 @@
 #include "timeline2/model/timelinefunctions.hpp"
 #include "timeline2/model/timelineitemmodel.hpp"
 
+#include <QDomDocument>
 #include <QJsonArray>
 #include <unordered_set>
 
@@ -124,10 +125,8 @@ RcReply clipSlip(const QJsonObject &p)
     RC_CLIP_OR_RETURN(tl, cid)
     auto offset = rcInt(p, "offset", err);
     if (!offset) return err;
-    Fun undo = []() { return true; };
-    Fun redo = []() { return true; };
-    if (!tl->requestClipSlip(*cid, *offset, true, undo, redo)) return refused(QStringLiteral("slip the clip"));
-    pCore->pushUndo(undo, redo, QStringLiteral("Slip clip"));
+    // group-aware overload: slips every member (an AV pair stays in sync) and skips locked tracks
+    if (tl->requestClipSlip(*cid, *offset, true, false) == 0) return refused(QStringLiteral("slip the clip"));
     return rcOk(QJsonObject());
 }
 
@@ -146,7 +145,8 @@ RcReply clipSpeed(const QJsonObject &p)
     auto change = pitch ? rcBool(p, "changeDuration", err, true) : std::nullopt;
     if (!change) return err;
     if (*speed == 0.) return rcFail(QStringLiteral("bad_params"), QStringLiteral("speed must be non-zero (1.0 = normal, negative = reverse)"));
-    if (!tl->requestClipTimeWarp(*cid, *speed, *pitch, *change)) return refused(QStringLiteral("change speed"));
+    // the public overload takes percent (100 = normal), like the GUI's speed dialog
+    if (!tl->requestClipTimeWarp(*cid, *speed * 100., *pitch, *change)) return refused(QStringLiteral("change speed"));
     return rcOk(QJsonObject());
 }
 
@@ -168,8 +168,15 @@ RcReply clipSplit(const QJsonObject &p, bool audio)
     auto target = rcInt(p, "targetTrackId", err, -1);
     if (!target) return err;
     if (*target >= 0 && !tl->isTrack(*target)) return rcFail(QStringLiteral("not_found"), QStringLiteral("no track with id %1").arg(*target));
-    const bool done = audio ? TimelineFunctions::requestSplitAudio(tl, *cid, *target >= 0 ? QList<int>{*target} : QList<int>())
-                            : TimelineFunctions::requestSplitVideo(tl, *cid, *target);
+    QList<int> audioTargets;
+    if (*target >= 0) {
+        audioTargets << *target;
+    } else {
+        for (int tid : tl->getTracksIds(true)) {
+            if (!tl->trackIsLocked(tid)) audioTargets << tid; // the GUI passes its active audio tracks; headless, any unlocked one
+        }
+    }
+    const bool done = audio ? TimelineFunctions::requestSplitAudio(tl, *cid, audioTargets) : TimelineFunctions::requestSplitVideo(tl, *cid, *target);
     if (!done) return refused(audio ? QStringLiteral("split audio") : QStringLiteral("split video"));
     return rcOk(QJsonObject());
 }
@@ -194,6 +201,15 @@ RcReply clipPaste(const QJsonObject &p)
     auto pos = tid ? rcPosition(p, "position", err) : std::nullopt;
     if (!pos) return err;
     if (tl->trackIsLocked(*tid)) return lockedError(*tid);
+    QDomDocument copied;
+    if (!copied.setContent(*xml)) return rcFail(QStringLiteral("bad_params"), QStringLiteral("xml is not clip.copy output"));
+    const QString sourceFps = copied.documentElement().attribute(QStringLiteral("fps"));
+    if (!sourceFps.isEmpty() && !qFuzzyCompare(sourceFps.toDouble(), pCore->getCurrentFps())) {
+        // pasteClips would ask the user about the framerate mismatch; refuse instead of opening a dialog
+        return rcFail(
+            QStringLiteral("failed"),
+            QStringLiteral("copied clips are from a %1 fps project (this one is %2 fps); paste them from the GUI").arg(sourceFps).arg(pCore->getCurrentFps()));
+    }
     if (!TimelineFunctions::pasteClips(tl, *xml, *tid, *pos)) return refused(QStringLiteral("paste"));
     return rcOk(QJsonObject());
 }

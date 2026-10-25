@@ -39,8 +39,23 @@ def test_garbage_rejected():
         timecode.parse("soon", 25)
 
 
-def test_ntsc_smpte_uses_nominal_rate():
-    assert timecode.parse("00:01:00:00", NTSC) == 1800
+def test_ntsc_is_drop_frame_like_kdenlive():
+    # Kdenlive shows 29.97 as drop-frame: 00:01:00 skips frames 0 and 1 of that minute
+    assert timecode.parse("00:01:00:02", NTSC) == 1800
+    assert timecode.parse("00:01:00,02", NTSC) == 1800
+    assert timecode.parse("00:10:00:00", NTSC) == 17982
+    assert timecode.parse("01:00:00:00", NTSC) == 107892
+
+
+def test_ntsc_format_drop_frame():
+    assert timecode.format(1800, NTSC) == "00:01:00,02"
+    assert timecode.format(107892, NTSC) == "01:00:00,00"
+
+
+def test_film_rate_uses_real_fps_like_kdenlive():
+    # non-drop rates: round((h*3600+m*60+s)*fps) + ff
+    assert timecode.parse("01:00:00:00", FILM) == 86314
+    assert timecode.format(240, FILM) == "00:00:10:00"
 
 
 def test_ntsc_seconds_use_real_rate():

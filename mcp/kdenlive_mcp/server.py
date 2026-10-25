@@ -21,6 +21,7 @@ INSTRUCTIONS = (
 server = MCPServer("kdenlive", instructions=INSTRUCTIONS)
 kd = Kdenlive()
 _request_open = False
+_request_label = ""
 
 
 async def call(command: str, params: dict | None = None) -> Any:
@@ -49,6 +50,13 @@ async def frames(value: str | int | None, default_playhead: bool = True) -> int:
 async def step(label: str):
     """One undo entry per tool, unless the AI already opened a request group."""
     if _request_open:
+        # Kdenlive closes a group after 10 s without calls (so a stalled AI can't swallow user edits); reopen it so the rest of
+        # the request still lands in one undo step.
+        try:
+            await kd.call("undo.begin", {"label": _request_label})
+        except KdenliveError as e:
+            if e.code != "group_open":
+                raise ToolError(str(e)) from e
         yield
         return
     await call("undo.begin", {"label": label})
@@ -164,9 +172,9 @@ async def redo() -> dict:
 @server.tool()
 async def begin_request(label: str) -> str:
     """Start grouping edits so the whole user request is one Ctrl+Z."""
-    global _request_open
+    global _request_open, _request_label
     await call("undo.begin", {"label": label})
-    _request_open = True
+    _request_open, _request_label = True, label
     return "ok"
 
 
@@ -238,7 +246,9 @@ async def delete_clips(clip_ids: list[int] | None = None) -> str:
         raise ToolError("nothing selected; pass clip_ids")
     async with step("delete clips"):
         for cid in ids:
-            await call("clip.delete", {"clipId": cid})
+            # deleting a grouped clip deletes its partners too
+            if any(c["id"] == cid for c in (await call("timeline.get"))["clips"]):
+                await call("clip.delete", {"clipId": cid})
     return "ok"
 
 

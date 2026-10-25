@@ -35,6 +35,20 @@ def session_bus_address(env, uid: int, exists=os.path.exists) -> str | None:
     return f"unix:path={path}" if exists(path) else None
 
 
+_VANISHED = {"org.freedesktop.DBus.Error.ServiceUnknown", "org.freedesktop.DBus.Error.NameHasNoOwner", "org.freedesktop.DBus.Error.Disconnected"}
+
+
+def should_rediscover(error_name: str) -> bool:
+    """Only a vanished instance is worth re-discovering; a NoReply timeout may mean the call is still running, so resending would run it twice."""
+    return error_name in _VANISHED
+
+
+class BusCallError(ConnectionError):
+    def __init__(self, error_name: str, body):
+        super().__init__(f"{error_name}: {body}")
+        self.error_name = error_name
+
+
 def pick_instance(candidates: list[tuple[str, int]], env_pid: str | None) -> str:
     """candidates: (bus name, pid) already filtered to those exposing /RemoteControl."""
     if env_pid:
@@ -61,7 +75,7 @@ class Kdenlive:
             Message(destination=destination, path=path, interface=interface, member=member, signature=signature, body=body or [])
         )
         if reply.message_type == MessageType.ERROR:
-            raise ConnectionError(f"{reply.error_name}: {reply.body}")
+            raise BusCallError(reply.error_name, reply.body)
         return reply
 
     async def _discover(self) -> str:
@@ -89,8 +103,13 @@ class Kdenlive:
                 self._name = await self._discover()
             try:
                 return (await self._dbus(self._name, PATH, IFACE, member, signature, body)).body[0]
-            except (ConnectionError, OSError):
+            except BusCallError as e:
+                if attempt or not should_rediscover(e.error_name):
+                    raise
                 self._name = None  # app restarted: re-discover once
+            except OSError:
+                self._name = None
+                self._bus = None
                 if attempt:
                     raise
         raise AssertionError("unreachable")

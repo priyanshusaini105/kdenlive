@@ -42,7 +42,8 @@ RcReply trackAdd(const QJsonObject &p)
     auto tl = rcTimeline(err);
     if (!tl) return err;
     auto audio = rcBool(p, "audio", err);
-    auto pos = audio ? rcInt(p, "position", err, -1) : std::nullopt;
+    // audio tracks live below video ones (Kdenlive's mirror-track logic relies on it): default audio to the top of the audio block
+    auto pos = audio ? rcInt(p, "position", err, *audio ? int(tl->getTracksIds(true).size()) : -1) : std::nullopt;
     auto name = pos ? rcString(p, "name", err, QString()) : std::nullopt;
     if (!name) return err;
     int id = -1;
@@ -112,7 +113,7 @@ void registerTrackCommands(RcRegistry &r)
 {
     add(r, QStringLiteral("track.add"), QStringLiteral("Add a track"),
         {{QStringLiteral("audio"), kBool, true, QString()},
-         {QStringLiteral("position"), kInt, false, QStringLiteral("MLT index, default -1 = top of its kind")},
+         {QStringLiteral("position"), kInt, false, QStringLiteral("index from the bottom; default: top of the audio block / top of the timeline")},
          {QStringLiteral("name"), QStringLiteral("string"), false, QString()}},
         trackAdd);
     add(r, QStringLiteral("track.delete"), QStringLiteral("Delete a track and its clips"), {kTrackId}, trackDelete);

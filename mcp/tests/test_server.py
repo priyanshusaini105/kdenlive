@@ -41,3 +41,61 @@ def test_cut_at_cuts_a_group_once(monkeypatch):
     monkeypatch.setattr(server, "call", fake)
     asyncio.run(server.cut_at(50))
     assert fake.cuts == [1]
+
+
+class FakeGroups:
+    """Records undo.begin/end; the first begin after `auto_closed` succeeds (Kdenlive's idle close), later ones report group_open."""
+
+    def __init__(self):
+        self.open = False
+        self.begins = 0
+
+    async def __call__(self, command, params=None):
+        from kdenlive_mcp.bus import KdenliveError
+        if command == "undo.begin":
+            if self.open:
+                raise KdenliveError("group_open", "an undo group is already open")
+            self.open = True
+            self.begins += 1
+            return {}
+        if command == "undo.end":
+            if not self.open:
+                raise KdenliveError("no_group", "no undo group is open")
+            self.open = False
+            return {}
+        return {}
+
+
+def test_request_group_is_reopened_after_idle_close(monkeypatch):
+    fake = FakeGroups()
+    monkeypatch.setattr(server, "call", fake)
+    monkeypatch.setattr(server.kd, "call", fake)
+    asyncio.run(server.begin_request("make it pop"))
+    fake.open = False  # Kdenlive closed the idle group while the AI was thinking
+
+    async def edit():
+        async with server.step("edit"):
+            pass
+
+    asyncio.run(edit())
+    assert fake.open and fake.begins == 2  # the request group was reopened, not one step per tool
+    asyncio.run(server.end_request())
+    assert not fake.open
+
+
+def test_delete_clips_skips_group_partners_already_deleted(monkeypatch):
+    clips = {1, 2}
+
+    async def fake(command, params=None):
+        from kdenlive_mcp.bus import KdenliveError
+        if command == "timeline.get":
+            return {"selection": [1, 2], "clips": [{"id": c} for c in clips]}
+        if command == "clip.delete":
+            if params["clipId"] not in clips:
+                raise KdenliveError("not_found", "no clip")
+            clips.clear()  # deleting one deletes its AV group
+            return {}
+        return {}
+
+    monkeypatch.setattr(server, "call", fake)
+    assert asyncio.run(server.delete_clips()) == "ok"

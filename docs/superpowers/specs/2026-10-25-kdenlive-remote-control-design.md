@@ -233,7 +233,7 @@ All paths are relative to `src/src/`. Line numbers are from upstream commit `406
 - **Active timeline:** `pCore->projectManager()->getTimeline()` `projectmanager.h:120`.
   Sequences: `getTimelinesUuids`, `openTimeline(binId,-1,uuid)`, `ClipCreator::createPlaylistClip`.
 - **Clips:** `getItemsInRange(tid,0,-1,true)` `timelinemodel.hpp:873`; getters at `:226-358`.
-  - `requestItemResize` `:641`, `requestClipSlip` `:661`, `requestClipTimeWarp` (ratio) `:912`.
+  - `requestItemResize` `:641`, `requestClipSlip` `:661`, `requestClipTimeWarp` (public overload takes percent; RC converts its ratio ×100) `:912`.
   - `TimelineFunctions::requestClipCut`, `extractZone` (`timelinefunctions.hpp:40,132`).
 - **Tracks:** `requestTrackInsertion` `:713`, `requestTrackDeletion` `:723`, `setTrackName`,
   `setTrackLockedState` `:432`. `hide` property: audio 1/3, video 2/3 (`trackmodel.cpp:1657`).

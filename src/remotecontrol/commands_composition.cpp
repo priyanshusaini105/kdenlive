@@ -49,6 +49,10 @@ RcReply compositionAdd(const QJsonObject &p)
     }
     if (*pos < 0 || *duration <= 0) return rcFail(QStringLiteral("bad_params"), QStringLiteral("need position >= 0 and duration > 0"));
     if (tl->trackIsLocked(*tid)) return rcFail(QStringLiteral("failed"), QStringLiteral("track %1 is locked").arg(*tid));
+    if (*aTrack >= tl->getTrackPosition(*tid)) {
+        // getTrackIndexFromPosition only Q_ASSERTs its bounds: an out-of-range index would walk past the track list
+        return rcFail(QStringLiteral("bad_params"), QStringLiteral("aTrack must be the MLT index of a lower track (0-%1)").arg(tl->getTrackPosition(*tid) - 1));
+    }
     int cid = -1;
     bool done;
     if (*aTrack >= 0) {

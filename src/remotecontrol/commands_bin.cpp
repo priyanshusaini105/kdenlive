@@ -109,12 +109,31 @@ RcReply binFolderCreate(const QJsonObject &p)
     return rcOk(QJsonObject{{QStringLiteral("folderId"), id}});
 }
 
+/** The root folder ("-1") must never be renamed or deleted: deleting it crashes Kdenlive. */
+RcReply refuseRoot(const QString &binId)
+{
+    return rcFail(QStringLiteral("bad_params"), QStringLiteral("bin id %1 is the root folder").arg(binId));
+}
+
+/** Sequence clips (and folders holding them) need Kdenlive's own deletion path, which closes their timelines and clears undo. */
+bool holdsSequence(const std::shared_ptr<AbstractProjectItem> &item)
+{
+    if (item->itemType() == AbstractProjectItem::FolderItem) {
+        for (int i = 0; i < item->childCount(); ++i) {
+            if (holdsSequence(std::static_pointer_cast<AbstractProjectItem>(item->child(i)))) return true;
+        }
+        return false;
+    }
+    return item->clipType() == ClipType::Timeline;
+}
+
 RcReply binRename(const QJsonObject &p)
 {
     RcReply err;
     auto binId = rcString(p, "binId", err);
     auto name = binId ? rcString(p, "name", err) : std::nullopt;
     if (!name) return err;
+    if (*binId == QLatin1String("-1")) return refuseRoot(*binId);
     auto item = pCore->projectItemModel()->getItemByBinId(*binId);
     if (!item) return rcFail(QStringLiteral("not_found"), QStringLiteral("no bin item with id %1").arg(*binId));
     if (item->itemType() != AbstractProjectItem::FolderItem && !pCore->bin()) {
@@ -131,8 +150,12 @@ RcReply binDelete(const QJsonObject &p)
     RcReply err;
     auto binId = rcString(p, "binId", err);
     if (!binId) return err;
+    if (*binId == QLatin1String("-1")) return refuseRoot(*binId);
     auto item = pCore->projectItemModel()->getItemByBinId(*binId);
     if (!item) return rcFail(QStringLiteral("not_found"), QStringLiteral("no bin item with id %1").arg(*binId));
+    if (holdsSequence(item)) {
+        return rcFail(QStringLiteral("failed"), QStringLiteral("%1 is or contains a sequence; delete sequences from Kdenlive's bin").arg(*binId));
+    }
     Fun undo = []() { return true; };
     Fun redo = []() { return true; };
     if (!pCore->projectItemModel()->requestBinClipDeletion(item, undo, redo))
@@ -215,6 +238,13 @@ RcReply binProxy(const QJsonObject &p)
         clips << clip;
     }
     if (clips.isEmpty()) return rcFail(QStringLiteral("bad_params"), QStringLiteral("'binIds' must be a non-empty array"));
+    for (const auto &clip : std::as_const(clips)) {
+        const auto t = clip->clipType();
+        if (*enabled && (t == ClipType::Video || t == ClipType::AV || t == ClipType::Playlist) && clip->statusReady() && clip->hasAlpha()) {
+            // KdenliveDoc would ask the user (proxies drop alpha); refuse instead of opening a dialog
+            return rcFail(QStringLiteral("failed"), QStringLiteral("bin clip %1 has an alpha channel; create its proxy from the GUI").arg(clip->clipId()));
+        }
+    }
     pCore->currentDoc()->slotProxyCurrentItem(*enabled, clips);
     return rcOk(QJsonObject());
 }
