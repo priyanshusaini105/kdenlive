@@ -5,6 +5,7 @@ It loads generated bars into an empty project itself, and leaves the timeline as
 """
 
 import asyncio
+import base64
 import pathlib
 import subprocess
 
@@ -34,31 +35,19 @@ async def until(predicate, what: str, tries: int = 50):
 
 
 async def video_clip(kd: Kdenlive, media: pathlib.Path) -> dict:
-    """A clip on a video track, loading the bars through stock D-Bus + clip.insert when the timeline is empty."""
+    """A clip on a video track; imports the bars with bin.import + clip.insert when there is none."""
     tl = await kd.call("timeline.get")
     video_tracks = [t["id"] for t in tl["tracks"] if not t["audio"]]
     on_video = [c for c in tl["clips"] if c["trackId"] in video_tracks]
     if on_video:
         return on_video[0]
-    if not tl["clips"]:
-        await kd._dbus(kd._name, "/kdenlive/MainWindow_1", "org.kde.kdenlive.MainWindow", "addProjectClip", "s", [str(media)])
+    bin_id = (await kd.call("bin.import", {"paths": [str(media)]}))["binIds"][0]
 
-        async def inserted():
-            await kd._dbus(kd._name, "/kdenlive/MainWindow_1", "org.kde.kdenlive.MainWindow", "addTimelineClip", "s", [str(media)])
-            return (await kd.call("timeline.get"))["clips"]
+    async def ready():
+        return any(c["binId"] == bin_id and c["ready"] for c in (await kd.call("bin.list"))["clips"])
 
-        await until(inserted, "stock addTimelineClip")
-    bin_id = (await kd.call("timeline.get"))["clips"][0]["binId"]
-
-    async def insert():
-        try:
-            return await kd.call("clip.insert", {"binId": bin_id, "trackId": video_tracks[0], "position": 500})
-        except KdenliveError as e:
-            if "loading" in e.message:
-                return None
-            raise
-
-    cid = (await until(insert, "clip.insert"))["clipId"]
+    await until(ready, "imported clip to load")
+    cid = (await kd.call("clip.insert", {"binId": bin_id, "trackId": video_tracks[0], "position": 500}))["clipId"]
     return next(c for c in (await kd.call("timeline.get"))["clips"] if c["id"] == cid)
 
 
@@ -113,6 +102,31 @@ async def main() -> None:
     await kd.call("undo")
     tl = await kd.call("timeline.get")
     assert len(tl["clips"]) == count and not tl["mixes"], "phase 3 undo should revert cut, effect, keyframe and mix"
+
+    # Phase 4: title on the top video track, look at it, undo
+    tl = await kd.call("timeline.get")
+    top_video = next(t["id"] for t in tl["tracks"] if not t["audio"])
+    title = (await kd.call("title.create", {"name": "e2e", "duration": 50,
+                                             "spec": {"items": [{"type": "text", "text": "E2E", "size": 120, "align": "center", "y": 400}]}}))["binId"]
+
+    async def title_ready():
+        return any(c["binId"] == title and c["ready"] for c in (await kd.call("bin.list"))["clips"])
+
+    await until(title_ready, "title to load")
+    clip_at = clip["position"]
+    try:
+        tid = (await kd.call("clip.insert", {"binId": title, "trackId": top_video, "position": clip_at}))["clipId"]
+    except KdenliveError:  # top track is the bars' track: use a fresh one
+        top_video = (await kd.call("track.add", {"audio": False}))["trackId"]
+        tid = (await kd.call("clip.insert", {"binId": title, "trackId": top_video, "position": clip_at}))["clipId"]
+    await kd.call("monitor.seek", {"position": clip_at + 10})
+    await asyncio.sleep(0.5)
+    shot = await kd.call("monitor.grab", {"width": 320})
+    png = base64.b64decode(shot["data"])
+    assert png[:8] == b"\x89PNG\r\n\x1a\n" and shot["width"] == 320, shot["width"]
+    (MEDIA / "grab.png").write_bytes(png)
+    await kd.call("clip.delete", {"clipId": tid})
+    await kd.call("bin.delete", {"binId": title})
 
     await kd.call("monitor.seek", {"position": 30})
 

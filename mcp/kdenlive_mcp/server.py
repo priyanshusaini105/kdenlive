@@ -3,7 +3,10 @@
 from contextlib import asynccontextmanager
 from typing import Any
 
-from mcp.server.mcpserver import MCPServer
+import asyncio
+import base64
+
+from mcp.server.mcpserver import Image, MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 
 from . import timecode
@@ -36,7 +39,8 @@ async def frames(value: str | int | None, default_playhead: bool = True) -> int:
             raise ToolError("no playhead available; pass a time")
         return tl["playhead"]
     try:
-        return timecode.parse(value, await kd.fps())
+        # plain frame counts need no fps (and no round trip)
+        return timecode.parse(value, 0 if isinstance(value, int) else await kd.fps())
     except ValueError as e:
         raise ToolError(str(e)) from e
 
@@ -410,6 +414,135 @@ async def add_composition(transition_id: str, track_id: int, start: str | int, e
     s0, e0 = await frames(start, False), await frames(end, False)
     async with step("composition"):
         return (await call("composition.add", {"transitionId": transition_id, "trackId": track_id, "position": s0, "duration": e0 - s0}))["compositionId"]
+
+
+@server.tool()
+async def import_media(paths: list[str], folder_id: str | None = None) -> list[str]:
+    """Import media files into the project bin. Returns bin ids (clips load asynchronously; see list_bin 'ready')."""
+    params: dict[str, Any] = {"paths": paths}
+    if folder_id:
+        params["folderId"] = folder_id
+    async with step("import"):
+        return (await call("bin.import", params))["binIds"]
+
+
+@server.tool()
+async def list_bin() -> dict:
+    """Project bin: clips (binId, name, type, duration, ready) and folders."""
+    return await call("bin.list")
+
+
+@server.tool()
+async def add_color_clip(color: str, duration: str | int, name: str = "Color") -> str:
+    """Create a color clip (#RRGGBB or #RRGGBBAA) in the bin. Returns its bin id."""
+    async with step("color clip"):
+        return (await call("bin.color", {"color": color, "duration": await frames(duration, False), "name": name}))["binId"]
+
+
+async def _wait_ready(bin_id: str, timeout_s: float = 10) -> None:
+    for _ in range(int(timeout_s / 0.2)):
+        if any(c["binId"] == bin_id and c["ready"] for c in (await call("bin.list"))["clips"]):
+            return
+        await asyncio.sleep(0.2)
+    raise ToolError(f"bin clip {bin_id} did not finish loading")
+
+
+def _title_spec(text: str, size: int, color: str, align: str, y: int | None, background: str | None, font: str) -> dict:
+    item: dict[str, Any] = {"type": "text", "text": text, "size": size, "color": color, "align": align, "font": font}
+    if y is not None:
+        item["y"] = y
+    spec: dict[str, Any] = {"items": [item]}
+    if background:
+        spec["background"] = background
+    return spec
+
+
+@server.tool()
+async def add_title(text: str, duration: str | int = "5s", time: str | int | None = None, track_id: int | None = None, size: int = 96,
+                    color: str = "#ffffff", align: str = "center", y: int | None = None, background: str | None = None, font: str = "Sans") -> int:
+    """Create a title and place it on the timeline at a time (default: playhead) on a video track (default: top). Returns the clip id.
+    y is in project pixels from the top (default: vertically centered)."""
+    d = await frames(duration, False)
+    t = await frames(time)
+    tl = await call("timeline.get")
+    if track_id is None:
+        video = [tr["id"] for tr in tl["tracks"] if not tr["audio"] and not tr["locked"]]
+        if not video:
+            raise ToolError("no unlocked video track")
+        track_id = video[0]
+    if y is None:
+        y = max(0, (await call("project.info"))["height"] // 2 - size)
+    async with step("title"):
+        bin_id = (await call("title.create", {"name": text[:30], "duration": d, "spec": _title_spec(text, size, color, align, y, background, font)}))["binId"]
+        await _wait_ready(bin_id)
+        return (await call("clip.insert", {"binId": bin_id, "trackId": track_id, "position": t}))["clipId"]
+
+
+@server.tool()
+async def update_title(bin_id: str, text: str, size: int = 96, color: str = "#ffffff", align: str = "center", y: int | None = None,
+                       background: str | None = None, font: str = "Sans") -> str:
+    """Replace a title clip's content (every timeline use updates)."""
+    async with step("update title"):
+        await call("title.update", {"binId": bin_id, "spec": _title_spec(text, size, color, align, y, background, font)})
+    return "ok"
+
+
+@server.tool()
+async def add_subtitle(start: str | int, end: str | int, text: str, layer: int = 0) -> int:
+    """Add a subtitle between two times. Returns its id."""
+    async with step("subtitle"):
+        return (await call("subtitle.add", {"start": await frames(start, False), "end": await frames(end, False), "text": text, "layer": layer}))["id"]
+
+
+@server.tool()
+async def list_subtitles() -> list[dict]:
+    """Subtitles (id, layer, start, end, text, style) with timecodes."""
+    fps = await kd.fps()
+    subs = await call("subtitle.list")
+    for s_ in subs:
+        s_["start_tc"], s_["end_tc"] = timecode.format(s_["start"], fps), timecode.format(s_["end"], fps)
+    return subs
+
+
+@server.tool()
+async def edit_subtitle(subtitle_id: int, text: str | None = None, start: str | int | None = None, end: str | int | None = None, style: str | None = None) -> str:
+    """Change a subtitle's text, timing or style."""
+    params: dict[str, Any] = {"id": subtitle_id}
+    if text is not None:
+        params["text"] = text
+    if start is not None:
+        params["start"] = await frames(start, False)
+    if end is not None:
+        params["end"] = await frames(end, False)
+    if style is not None:
+        params["style"] = style
+    async with step("edit subtitle"):
+        await call("subtitle.edit", params)
+    return "ok"
+
+
+@server.tool()
+async def grab_frame(time: str | int | None = None, width: int = 640) -> Image:
+    """Look at the project monitor: seeks to `time` if given, then returns the frame as an image."""
+    if time is not None:
+        await call("monitor.seek", {"position": await frames(time, False)})
+        await asyncio.sleep(0.3)
+    shot = await call("monitor.grab", {"width": width})
+    return Image(data=base64.b64decode(shot["data"]), format="png")
+
+
+@server.tool()
+async def set_volume(track_id: int, db: float) -> str:
+    """Set an audio track's (or master, track_id=-1) volume in dB (0 = unchanged). Not undoable."""
+    await call("mixer.set", {"trackId": track_id, "volumeDb": db})
+    return "ok"
+
+
+@server.tool()
+async def set_pan(track_id: int, pan: float) -> str:
+    """Set an audio track's balance: 0 = left, 0.5 = center, 1 = right. Not undoable."""
+    await call("mixer.set", {"trackId": track_id, "pan": pan})
+    return "ok"
 
 
 def main() -> None:
