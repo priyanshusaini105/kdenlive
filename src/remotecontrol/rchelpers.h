@@ -6,11 +6,15 @@
 
 #include "rccommand.h"
 
+#include <QJsonArray>
+
 #include <memory>
 #include <optional>
 
 class TimelineItemModel;
 class EffectStackModel;
+class AssetParameterModel;
+class QDomElement;
 
 /* All helpers return std::nullopt / nullptr and fill `err` on failure.
  * Kdenlive is built without exceptions: validate before touching any model getter. */
@@ -23,3 +27,7 @@ std::optional<int> rcClip(const std::shared_ptr<TimelineItemModel> &tl, const QJ
 std::optional<int> rcTrack(const std::shared_ptr<TimelineItemModel> &tl, const QJsonObject &p, RcReply &err, const char *key = "trackId");
 /** @brief Resolve an effect target {type: clip|track|master|bin, id}. */
 std::shared_ptr<EffectStackModel> rcEffectStack(const QJsonObject &target, RcReply &err);
+/** @brief Parameters of any asset model (effect, composition, mix) as JSON; xml is its repository definition (for types). */
+QJsonArray rcAssetParams(AssetParameterModel *model, const QDomElement &xml);
+/** @brief Set parameters {name: value} with one undo step. */
+RcReply rcSetAssetParams(const std::shared_ptr<AssetParameterModel> &model, const QJsonObject &params);

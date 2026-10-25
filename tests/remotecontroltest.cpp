@@ -542,3 +542,64 @@ TEST_CASE("RC effect stack and keyframes", "[RemoteControl]")
                             {QStringLiteral("value"), QStringLiteral("1")}})) == QStringLiteral("bad_params"));
     }
 }
+
+TEST_CASE("RC compositions and mixes", "[RemoteControl]")
+{
+    RcFixture f;
+    RemoteControl r;
+    auto ok = [](const QJsonObject &o) { return o.value(QStringLiteral("ok")).toBool(); };
+    auto tlGet = [&]() { return rc(r, QStringLiteral("timeline.get")).value(QStringLiteral("result")).toObject(); };
+
+    SECTION("composition add, params, undo, stale id")
+    {
+        int tid2;
+        REQUIRE(f.timeline->requestTrackInsertion(-1, tid2));
+        auto added = rc(r, QStringLiteral("composition.add"),
+                        {{QStringLiteral("transitionId"), QStringLiteral("composite")},
+                         {QStringLiteral("trackId"), tid2},
+                         {QStringLiteral("position"), 100},
+                         {QStringLiteral("duration"), 20}});
+        REQUIRE(ok(added));
+        const int compo = added.value(QStringLiteral("result")).toObject().value(QStringLiteral("compositionId")).toInt();
+        REQUIRE(tlGet().value(QStringLiteral("compositions")).toArray().size() == 1);
+        REQUIRE(!rc(r, QStringLiteral("composition.get"), {{QStringLiteral("compositionId"), compo}})
+                     .value(QStringLiteral("result"))
+                     .toObject()
+                     .value(QStringLiteral("params"))
+                     .toArray()
+                     .isEmpty());
+        REQUIRE(ok(rc(r, QStringLiteral("composition.move"),
+                      {{QStringLiteral("compositionId"), compo}, {QStringLiteral("trackId"), tid2}, {QStringLiteral("position"), 110}})));
+        f.undoStack->undo();
+        f.undoStack->undo();
+        REQUIRE(tlGet().value(QStringLiteral("compositions")).toArray().isEmpty());
+        REQUIRE(errCode(rc(r, QStringLiteral("composition.delete"), {{QStringLiteral("compositionId"), compo}})) == QStringLiteral("not_found"));
+        REQUIRE(errCode(rc(r, QStringLiteral("composition.add"),
+                           {{QStringLiteral("transitionId"), QStringLiteral("nope")},
+                            {QStringLiteral("trackId"), tid2},
+                            {QStringLiteral("position"), 0},
+                            {QStringLiteral("duration"), 10}})) == QStringLiteral("not_found"));
+    }
+
+    SECTION("same-track mix")
+    {
+        QString longBin = KdenliveTests::createProducer(pCore->getProjectProfile(), "blue", pCore->projectItemModel(), 100, true);
+        int a, b;
+        REQUIRE(f.timeline->requestClipInsertion(longBin, f.tid, 300, a));
+        REQUIRE(f.timeline->requestItemResize(a, 50, true) == 50);
+        REQUIRE(f.timeline->requestClipInsertion(longBin, f.tid, 350, b));
+        REQUIRE(errCode(rc(r, QStringLiteral("mix.add"), {{QStringLiteral("clipId"), f.cid}})) == QStringLiteral("failed"));
+        REQUIRE(ok(rc(r, QStringLiteral("mix.add"), {{QStringLiteral("clipId"), b}})));
+        REQUIRE(tlGet().value(QStringLiteral("mixes")).toArray().size() == 1);
+        REQUIRE(tlGet().value(QStringLiteral("mixes")).toArray().at(0).toObject().value(QStringLiteral("clipId")).toInt() == b);
+        REQUIRE(!rc(r, QStringLiteral("mix.get"), {{QStringLiteral("clipId"), b}})
+                     .value(QStringLiteral("result"))
+                     .toObject()
+                     .value(QStringLiteral("params"))
+                     .toArray()
+                     .isEmpty());
+        REQUIRE(ok(rc(r, QStringLiteral("mix.remove"), {{QStringLiteral("clipId"), b}})));
+        REQUIRE(tlGet().value(QStringLiteral("mixes")).toArray().isEmpty());
+        REQUIRE(errCode(rc(r, QStringLiteral("mix.remove"), {{QStringLiteral("clipId"), b}})) == QStringLiteral("not_found"));
+    }
+}

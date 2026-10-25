@@ -5,8 +5,10 @@
 #include "core.h"
 #include "profiles/profilemodel.hpp"
 #include "rchelpers.h"
+#include "remotecontrol.h"
 #include "timeline2/model/timelinefunctions.hpp"
 #include "timeline2/model/timelineitemmodel.hpp"
+#include "timeline2/model/trackmodel.hpp"
 
 #include <QJsonArray>
 #include <algorithm>
@@ -86,6 +88,19 @@ RcReply timelineGet(const QJsonObject &)
     std::sort(clips.begin(), clips.end(), byTrackThenPos);
     std::sort(compositions.begin(), compositions.end(), byTrackThenPos);
 
+    QJsonArray mixes;
+    for (const auto &o : std::as_const(clips)) {
+        const int cid = o.value(QStringLiteral("id")).toInt();
+        auto track = RemoteControl::track(tl, o.value(QStringLiteral("trackId")).toInt());
+        if (tl->getMixInOut(cid).first > -1) {
+            auto model = track->mixModel(cid);
+            mixes.append(QJsonObject{{QStringLiteral("clipId"), cid},
+                                     {QStringLiteral("previousClipId"), track->getMixInfo(cid).first.firstClipId},
+                                     {QStringLiteral("trackId"), o.value(QStringLiteral("trackId"))},
+                                     {QStringLiteral("assetId"), model ? model->getAssetId() : QString()},
+                                     {QStringLiteral("duration"), tl->getMixDuration(cid)}});
+        }
+    }
     QJsonArray selection;
     for (int id : tl->getCurrentSelection()) {
         selection.append(id);
@@ -104,6 +119,7 @@ RcReply timelineGet(const QJsonObject &)
                             {QStringLiteral("tracks"), tracks},
                             {QStringLiteral("clips"), clipArray},
                             {QStringLiteral("compositions"), compositionArray},
+                            {QStringLiteral("mixes"), mixes},
                             {QStringLiteral("selection"), selection}});
 }
 

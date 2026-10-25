@@ -8,6 +8,10 @@
 
 #include <QObject>
 #include <QTimer>
+#include <memory>
+
+class TimelineItemModel;
+class TrackModel;
 
 /** @class RemoteControl
     @brief JSON command dispatcher exported on D-Bus at /RemoteControl, so external tools (an MCP server) can drive the editor.
@@ -25,6 +29,8 @@ public:
     bool groupOpen() const;
     void beginGroup(const QString &label);
     void endGroup();
+    /** @brief Track model access for command handlers (TimelineModel befriends this class). */
+    static std::shared_ptr<TrackModel> track(const std::shared_ptr<TimelineItemModel> &tl, int tid);
 
 public Q_SLOTS:
     Q_SCRIPTABLE QString call(const QString &command, const QString &paramsJson);

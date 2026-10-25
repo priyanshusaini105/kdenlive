@@ -79,30 +79,7 @@ RcReply effectAdd(const QJsonObject &p)
 
 QJsonArray paramsJson(const std::shared_ptr<EffectItemModel> &fx)
 {
-    QHash<QString, QString> types;
-    const QDomNodeList xmlParams = EffectsRepository::get()->getXml(fx->getAssetId()).elementsByTagName(QStringLiteral("parameter"));
-    for (int i = 0; i < xmlParams.count(); ++i) {
-        const QDomElement e = xmlParams.item(i).toElement();
-        types.insert(e.attribute(QStringLiteral("name")), e.attribute(QStringLiteral("type")));
-    }
-    AssetParameterModel *m = fx.get();
-    QJsonArray out;
-    for (int row = 0; row < m->rowCount(); ++row) {
-        const QModelIndex ix = m->index(row, 0);
-        const QString name = m->data(ix, AssetParameterModel::NameRole).toString();
-        QJsonObject param{{QStringLiteral("name"), name},
-                          {QStringLiteral("type"), types.value(name)},
-                          {QStringLiteral("value"), m->data(ix, AssetParameterModel::ValueRole).toString()},
-                          {QStringLiteral("default"), m->data(ix, AssetParameterModel::DefaultRole).toString()},
-                          {QStringLiteral("min"), m->data(ix, AssetParameterModel::MinRole).toString()},
-                          {QStringLiteral("max"), m->data(ix, AssetParameterModel::MaxRole).toString()}};
-        const QStringList values = m->data(ix, AssetParameterModel::ListValuesRole).toStringList();
-        if (values.size() > 1) {
-            param.insert(QStringLiteral("values"), QJsonArray::fromStringList(values));
-        }
-        out.append(param);
-    }
-    return out;
+    return rcAssetParams(fx.get(), EffectsRepository::get()->getXml(fx->getAssetId()));
 }
 
 RcReply effectGet(const QJsonObject &p)
@@ -130,27 +107,7 @@ RcReply effectSet(const QJsonObject &p)
     if (!stack) return err;
     auto fx = effectAt(stack, p, err);
     if (!fx) return err;
-    const QJsonObject params = p.value(QStringLiteral("params")).toObject();
-    if (params.isEmpty()) {
-        return rcFail(QStringLiteral("bad_params"), QStringLiteral("'params' must be a non-empty object of name: value"));
-    }
-    std::shared_ptr<AssetParameterModel> model = fx;
-    QList<QModelIndex> indexes;
-    QStringList values;
-    for (auto it = params.begin(); it != params.end(); ++it) {
-        const QModelIndex ix = model->getParamIndexFromName(it.key());
-        if (!ix.isValid()) {
-            return rcFail(QStringLiteral("bad_params"), QStringLiteral("effect '%1' has no parameter '%2'").arg(fx->getAssetId(), it.key()));
-        }
-        indexes << ix;
-        values << valueString(it.value());
-    }
-    if (indexes.size() == 1) {
-        pCore->pushUndo(new AssetCommand(model, indexes.first(), values.first()));
-    } else {
-        pCore->pushUndo(new AssetMultiCommand(model, indexes, values));
-    }
-    return rcOk(QJsonObject());
+    return rcSetAssetParams(fx, p.value(QStringLiteral("params")).toObject());
 }
 
 RcReply effectRemove(const QJsonObject &p)
@@ -356,6 +313,56 @@ RcReply keyframeMove(const QJsonObject &p)
 
 const QList<RcParam> kTarget{{QStringLiteral("target"), QStringLiteral("object"), true, QStringLiteral("{type: clip|track|master|bin, id}")}};
 } // namespace
+
+QJsonArray rcAssetParams(AssetParameterModel *m, const QDomElement &xml)
+{
+    QHash<QString, QString> types;
+    const QDomNodeList xmlParams = xml.elementsByTagName(QStringLiteral("parameter"));
+    for (int i = 0; i < xmlParams.count(); ++i) {
+        const QDomElement e = xmlParams.item(i).toElement();
+        types.insert(e.attribute(QStringLiteral("name")), e.attribute(QStringLiteral("type")));
+    }
+    QJsonArray out;
+    for (int row = 0; row < m->rowCount(); ++row) {
+        const QModelIndex ix = m->index(row, 0);
+        const QString name = m->data(ix, AssetParameterModel::NameRole).toString();
+        QJsonObject param{{QStringLiteral("name"), name},
+                          {QStringLiteral("type"), types.value(name)},
+                          {QStringLiteral("value"), m->data(ix, AssetParameterModel::ValueRole).toString()},
+                          {QStringLiteral("default"), m->data(ix, AssetParameterModel::DefaultRole).toString()},
+                          {QStringLiteral("min"), m->data(ix, AssetParameterModel::MinRole).toString()},
+                          {QStringLiteral("max"), m->data(ix, AssetParameterModel::MaxRole).toString()}};
+        const QStringList values = m->data(ix, AssetParameterModel::ListValuesRole).toStringList();
+        if (values.size() > 1) {
+            param.insert(QStringLiteral("values"), QJsonArray::fromStringList(values));
+        }
+        out.append(param);
+    }
+    return out;
+}
+
+RcReply rcSetAssetParams(const std::shared_ptr<AssetParameterModel> &model, const QJsonObject &params)
+{
+    if (params.isEmpty()) {
+        return rcFail(QStringLiteral("bad_params"), QStringLiteral("'params' must be a non-empty object of name: value"));
+    }
+    QList<QModelIndex> indexes;
+    QStringList values;
+    for (auto it = params.begin(); it != params.end(); ++it) {
+        const QModelIndex ix = model->getParamIndexFromName(it.key());
+        if (!ix.isValid()) {
+            return rcFail(QStringLiteral("bad_params"), QStringLiteral("'%1' has no parameter '%2'").arg(model->getAssetId(), it.key()));
+        }
+        indexes << ix;
+        values << valueString(it.value());
+    }
+    if (indexes.size() == 1) {
+        pCore->pushUndo(new AssetCommand(model, indexes.first(), values.first()));
+    } else {
+        pCore->pushUndo(new AssetMultiCommand(model, indexes, values));
+    }
+    return rcOk(QJsonObject());
+}
 
 void registerEffectCommands(RcRegistry &r)
 {

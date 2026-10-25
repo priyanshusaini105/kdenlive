@@ -5,6 +5,8 @@
 #include "remotecontrol.h"
 #include "core.h"
 #include "doc/docundostack.hpp"
+#include "timeline2/model/timelineitemmodel.hpp"
+#include "timeline2/model/trackmodel.hpp"
 
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -21,9 +23,15 @@ RemoteControl::RemoteControl(QObject *parent)
     registerMarkerCommands(m_registry);
     registerMonitorCommands(m_registry);
     registerAssetCommands(m_registry);
+    registerCompositionCommands(m_registry);
     m_idle.setSingleShot(true);
     m_idle.setInterval(10000);
     connect(&m_idle, &QTimer::timeout, this, &RemoteControl::endGroup);
+}
+
+std::shared_ptr<TrackModel> RemoteControl::track(const std::shared_ptr<TimelineItemModel> &tl, int tid)
+{
+    return tl->getTrackById_const(tid);
 }
 
 void RemoteControl::setIdleTimeoutMs(int ms)
