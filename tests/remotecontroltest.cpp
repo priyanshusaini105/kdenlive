@@ -793,3 +793,31 @@ TEST_CASE("RC subtitles", "[RemoteControl]")
                        {{QStringLiteral("start"), 50}, {QStringLiteral("end"), 10}, {QStringLiteral("text"), QStringLiteral("x")}})) ==
             QStringLiteral("bad_params"));
 }
+
+TEST_CASE("RC mixer and frame grab", "[RemoteControl]")
+{
+    RcFixture f;
+    RemoteControl r;
+    auto ok = [](const QJsonObject &o) { return o.value(QStringLiteral("ok")).toBool(); };
+    int atid;
+    REQUIRE(f.timeline->requestTrackInsertion(-1, atid, QString(), true));
+    auto mixerOf = [&](int tid) {
+        for (const auto &m : rc(r, QStringLiteral("mixer.get")).value(QStringLiteral("result")).toArray()) {
+            if (m.toObject().value(QStringLiteral("trackId")).toInt() == tid) return m.toObject();
+        }
+        return QJsonObject();
+    };
+
+    REQUIRE(!mixerOf(atid).isEmpty());
+    REQUIRE(!mixerOf(-1).isEmpty());   // master
+    REQUIRE(mixerOf(f.tid).isEmpty()); // video tracks have no mixer strip
+    REQUIRE(ok(rc(r, QStringLiteral("mixer.set"), {{QStringLiteral("trackId"), atid}, {QStringLiteral("volumeDb"), -6}, {QStringLiteral("pan"), 0.25}})));
+    REQUIRE(mixerOf(atid).value(QStringLiteral("volumeDb")).toDouble() == -6.);
+    REQUIRE(mixerOf(atid).value(QStringLiteral("pan")).toDouble() == 0.25);
+    REQUIRE(ok(rc(r, QStringLiteral("mixer.set"), {{QStringLiteral("trackId"), -1}, {QStringLiteral("volumeDb"), -3}})));
+    REQUIRE(mixerOf(-1).value(QStringLiteral("volumeDb")).toDouble() == -3.);
+    REQUIRE(errCode(rc(r, QStringLiteral("mixer.set"), {{QStringLiteral("trackId"), atid}, {QStringLiteral("pan"), 1.5}})) == QStringLiteral("bad_params"));
+    REQUIRE(errCode(rc(r, QStringLiteral("mixer.set"), {{QStringLiteral("trackId"), f.tid}, {QStringLiteral("volumeDb"), 0}})) == QStringLiteral("bad_params"));
+    REQUIRE(errCode(rc(r, QStringLiteral("mixer.solo"), {{QStringLiteral("trackId"), atid}})) == QStringLiteral("no_gui"));
+    REQUIRE(errCode(rc(r, QStringLiteral("monitor.grab"))) == QStringLiteral("no_gui"));
+}

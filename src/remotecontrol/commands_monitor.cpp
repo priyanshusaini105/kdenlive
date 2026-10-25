@@ -4,7 +4,12 @@
 
 #include "core.h"
 #include "monitor/monitor.h"
+#include "monitor/monitorproxy.h"
+#include "profiles/profilemodel.hpp"
+
 #include "rchelpers.h"
+#include <QBuffer>
+#include <QImage>
 
 namespace {
 /** "project" (default) or "clip" monitor. */
@@ -50,6 +55,28 @@ RcReply monitorPosition(const QJsonObject &p)
     return rcOk(QJsonObject{{QStringLiteral("position"), m->position()}, {QStringLiteral("playing"), m->isPlaying()}});
 }
 
+RcReply monitorGrab(const QJsonObject &p)
+{
+    RcReply err;
+    Monitor *m = monitorFrom(p, err);
+    auto width = m ? rcInt(p, "width", err, 640) : std::nullopt;
+    if (!width) return err;
+    if (*width < 16 || *width > 3840) return rcFail(QStringLiteral("bad_params"), QStringLiteral("width must be 16-3840"));
+    auto &profile = pCore->getCurrentProfile();
+    const int height = qMax(2, int(*width * double(profile->height()) / profile->width()) & ~1);
+    const QImage image = m->getControllerProxy()->extractFrame(QString(), *width, height);
+    if (image.isNull()) return rcFail(QStringLiteral("failed"), QStringLiteral("no frame available (empty timeline?)"));
+    QByteArray png;
+    QBuffer buffer(&png);
+    buffer.open(QIODevice::WriteOnly);
+    image.save(&buffer, "PNG");
+    return rcOk(QJsonObject{{QStringLiteral("mime"), QStringLiteral("image/png")},
+                            {QStringLiteral("width"), image.width()},
+                            {QStringLiteral("height"), image.height()},
+                            {QStringLiteral("position"), m->position()},
+                            {QStringLiteral("data"), QString::fromLatin1(png.toBase64())}});
+}
+
 const RcParam kMonitor{QStringLiteral("monitor"), QStringLiteral("string"), false, QStringLiteral("'project' (default) or 'clip'")};
 } // namespace
 
@@ -71,4 +98,12 @@ void registerMonitorCommands(RcRegistry &r)
                                               monitorPlay});
     r.insert(QStringLiteral("monitor.position"),
              {QStringLiteral("monitor.position"), QStringLiteral("Playhead frame and play state"), {kMonitor}, false, true, true, monitorPosition});
+    r.insert(QStringLiteral("monitor.grab"),
+             {QStringLiteral("monitor.grab"),
+              QStringLiteral("The monitor's current frame as a base64 PNG, so you can look at the shot"),
+              {kMonitor, {QStringLiteral("width"), QStringLiteral("int"), false, QStringLiteral("default 640; height follows the profile aspect")}},
+              false,
+              true,
+              true,
+              monitorGrab});
 }
