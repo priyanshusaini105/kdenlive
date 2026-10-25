@@ -3,6 +3,7 @@
 */
 
 #include "core.h"
+#include "dialogs/wizard.h"
 #include "kdenlivesettings.h"
 #include "mainwindow.h"
 #include "monitor/monitor.h"
@@ -15,6 +16,7 @@
 #include <QFileInfo>
 #include <QJsonArray>
 #include <QProcess>
+#include <QTimer>
 
 namespace {
 /** jobId → running kdenlive_render processes (several for multi-pass/multi-export). */
@@ -63,6 +65,9 @@ RcReply renderStart(const QJsonObject &p)
     }
     if (!pCore->window()) return rcFail(QStringLiteral("no_gui"), QStringLiteral("rendering needs the Kdenlive window"));
     if (KdenliveSettings::kdenliverendererpath().isEmpty() || !QFileInfo::exists(KdenliveSettings::kdenliverendererpath())) {
+        Wizard::fixKdenliveRenderPath(); // same self-repair Kdenlive's own command-line render does
+    }
+    if (KdenliveSettings::kdenliverendererpath().isEmpty() || !QFileInfo::exists(KdenliveSettings::kdenliverendererpath())) {
         return rcFail(QStringLiteral("failed"), QStringLiteral("kdenlive_render not found; check Settings > Environment"));
     }
     RenderRequest request;
@@ -93,15 +98,34 @@ RcReply renderStart(const QJsonObject &p)
                 if (status != QProcess::NormalExit || exitCode != 0) {
                     rcJobFinish(id, QStringLiteral("kdenlive_render exited with code %1").arg(exitCode));
                 } else if (allDone) {
-                    rcJobFinish(id);
+                    // kdenlive_render exits 0 even when the render aborts: trust RenderServer's verdict, then fall back to the output file.
+                    const QString output = process->property("rcOutput").toString();
+                    QTimer::singleShot(1500, pCore.get(), [id, output]() {
+                        if (rcJobStatus(id).value(QStringLiteral("state")).toString() != QLatin1String("running")) return;
+                        if (QFileInfo(output).size() > 1024) {
+                            rcJobFinish(id);
+                        } else {
+                            rcJobFinish(id, QStringLiteral("the renderer produced no usable output; see %1.log").arg(output));
+                        }
+                    });
                 }
             }
             process->deleteLater();
         });
+        process->setProperty("rcOutput", job.outputPath);
         renders()[id] << process;
         process->start(KdenliveSettings::kdenliverendererpath(), RenderRequest::argsByJob(job, true));
     }
     if (server) {
+        // -1 finished, -2 failed, -3 aborted (RenderWidget::setRenderStatus)
+        QObject::connect(server, &RenderServer::setRenderingFinished, pCore.get(), [id, outputs](const QString &url, int status, const QString &error) {
+            if (!outputs.contains(url) || rcJobStatus(id).value(QStringLiteral("state")).toString() != QLatin1String("running")) return;
+            if (status == -1) {
+                rcJobFinish(id);
+            } else {
+                rcJobFinish(id, error.isEmpty() ? QStringLiteral("render failed (status %1); see %2.log").arg(status).arg(url) : error);
+            }
+        });
         QObject::connect(server, &RenderServer::setRenderingProgress, pCore.get(), [id, outputs](const QString &url, int progress, int) {
             if (outputs.contains(url)) rcJobUpdate(id, progress);
         });

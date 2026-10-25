@@ -9,6 +9,7 @@ import base64
 import pathlib
 import subprocess
 
+from kdenlive_mcp import geometry
 from kdenlive_mcp.bus import Kdenlive, KdenliveError
 
 MEDIA = pathlib.Path("/tmp/claude-1002/kdenlive-e2e")
@@ -136,6 +137,39 @@ async def main() -> None:
     await until(seeked, "seek to 30")
 
     assert await kd.call("action.list", {"filter": "razor"}), "razor action missing"
+
+    # Phase 5: transform via qtblend, save, render 2s and probe the file
+    target = {"type": "clip", "id": clip["id"]}
+    await kd.call("undo.begin", {"label": "e2e transform"})
+    index = (await kd.call("effect.add", {"target": target, "effectId": "qtblend"}))["index"]
+    await kd.call("effect.set", {"target": target, "index": index, "params": {"rect": geometry.rect(100, 100, 960, 540)}})
+    await kd.call("undo.end")
+    project = MEDIA / "e2e.kdenlive"
+    job = (await kd.call("project.save", {"path": str(project)}))["jobId"]
+
+    async def saved():
+        return (await kd.call("job.status", {"jobId": job}))["state"] == "done"
+
+    await until(saved, "project save")
+    assert project.stat().st_size > 0
+    presets = await kd.call("render.presets")
+    # software H.264 (hardware presets like *_amf/nvenc/vaapi may be unavailable on the machine)
+    preset = next(p_["name"] for p_ in presets if p_["extension"] == "mp4" and not any(hw in p_["name"].lower() for hw in ("amf", "nvenc", "vaapi", "qsv", "quick sync", "videotoolbox")))
+    out = MEDIA / "out.mp4"
+    out.unlink(missing_ok=True)
+    job = (await kd.call("render.start", {"preset": preset, "output": str(out),
+                                          "range": {"in": clip["position"], "out": clip["position"] + 50}}))["jobId"]
+
+    async def rendered():
+        status = await kd.call("render.status", {"jobId": job})
+        assert status["state"] != "failed", status
+        return status["state"] == "done"
+
+    await until(rendered, "render", tries=600)
+    probe = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", str(out)],
+                           capture_output=True, text=True, check=True)
+    assert float(probe.stdout.strip()) > 1.5, probe.stdout
+    await kd.call("undo")  # remove the transform effect
     print("E2E OK")
 
 

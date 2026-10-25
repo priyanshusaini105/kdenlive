@@ -9,7 +9,7 @@ import base64
 from mcp.server.mcpserver import Image, MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 
-from . import timecode
+from . import geometry, timecode
 from .bus import AmbiguousInstance, Kdenlive, KdenliveError, KdenliveNotRunning
 
 INSTRUCTIONS = (
@@ -543,6 +543,135 @@ async def set_pan(track_id: int, pan: float) -> str:
     """Set an audio track's balance: 0 = left, 0.5 = center, 1 = right. Not undoable."""
     await call("mixer.set", {"trackId": track_id, "pan": pan})
     return "ok"
+
+
+async def _effect_index(clip_id: int, effect_id: str) -> int:
+    """Index of effect_id on the clip, adding it if absent."""
+    target = {"type": "clip", "id": clip_id}
+    for fx in await call("effect.get", {"target": target}):
+        if fx["effectId"] == effect_id:
+            return fx["index"]
+    return (await call("effect.add", {"target": target, "effectId": effect_id}))["index"]
+
+
+@server.tool()
+async def transform_clip(clip_id: int, x: float, y: float, w: float, h: float, opacity: float = 1.0, at: str | int | None = None) -> str:
+    """Position/scale a clip (project pixels) with the Transform effect. With `at` (timeline time) it sets a keyframe there, else a static value."""
+    value = geometry.rect(x, y, w, h, opacity)
+    async with step("transform"):
+        index = await _effect_index(clip_id, "qtblend")
+        if at is None:
+            await call("effect.set", {"target": {"type": "clip", "id": clip_id}, "index": index, "params": {"rect": value}})
+        else:
+            clip = await _clip(clip_id)
+            local = await frames(at, False) - clip["position"]
+            await call("keyframe.set", {"target": {"type": "clip", "id": clip_id}, "index": index, "param": "rect", "frame": local, "value": value})
+    return "ok"
+
+
+@server.tool()
+async def zoom_clip(clip_id: int, from_scale: float = 1.0, to_scale: float = 1.2, interp: str = "smooth") -> str:
+    """Ken Burns style zoom over the whole clip, around the center (1.0 = no zoom)."""
+    clip = await _clip(clip_id)
+    info = await call("project.info")
+    anim = geometry.animate([(0, geometry.zoom_rect(from_scale, info["width"], info["height"])),
+                             (clip["duration"] - 1, geometry.zoom_rect(to_scale, info["width"], info["height"]))], interp)
+    async with step("zoom"):
+        index = await _effect_index(clip_id, "qtblend")
+        await call("effect.set", {"target": {"type": "clip", "id": clip_id}, "index": index, "params": {"rect": anim}})
+    return "ok"
+
+
+@server.tool()
+async def mask_clip(clip_id: int, points: list[list[float]]) -> str:
+    """Polygon mask (rotoscoping): points as [x, y] fractions 0..1 of the frame, e.g. [[0.25,0.25],[0.75,0.25],[0.75,0.75],[0.25,0.75]]."""
+    clip = await _clip(clip_id)
+    try:
+        spline = geometry.roto([(p_[0], p_[1]) for p_ in points], 0, clip["duration"])
+    except (ValueError, IndexError) as e:
+        raise ToolError(str(e)) from e
+    async with step("mask"):
+        index = await _effect_index(clip_id, "rotoscoping")
+        await call("effect.set", {"target": {"type": "clip", "id": clip_id}, "index": index, "params": {"spline": spline}})
+    return "ok"
+
+
+async def _wait_job(job_id: int, command: str = "job.status", timeout_s: float = 3600, every_s: float = 1.0) -> dict:
+    for _ in range(int(timeout_s / every_s)):
+        status = await call(command, {"jobId": job_id})
+        if status["state"] != "running":
+            if status["state"] == "failed":
+                raise ToolError(status.get("error", "job failed"))
+            return status
+        await asyncio.sleep(every_s)
+    raise ToolError(f"job {job_id} still running after {timeout_s:.0f}s")
+
+
+@server.tool()
+async def save_project(path: str | None = None) -> str:
+    """Save the project (path required when it is untitled; must end in .kdenlive)."""
+    params = {"path": path} if path else {}
+    await _wait_job((await call("project.save", params))["jobId"], timeout_s=120, every_s=0.3)
+    return "saved"
+
+
+@server.tool()
+async def new_project(profile: str | None = None, discard_changes: bool = False) -> str:
+    """Start a new empty project. Refuses if there are unsaved changes unless discard_changes=True."""
+    if discard_changes:
+        await call("project.discard")
+    await _wait_job((await call("project.new", {"profile": profile} if profile else {}))["jobId"], timeout_s=120, every_s=0.3)
+    return "ok"
+
+
+@server.tool()
+async def open_project(path: str, discard_changes: bool = False) -> str:
+    """Open a .kdenlive project. Refuses if there are unsaved changes unless discard_changes=True. Kdenlive may show the user a recovery prompt."""
+    if discard_changes:
+        await call("project.discard")
+    await _wait_job((await call("project.open", {"path": path}))["jobId"], timeout_s=300, every_s=0.5)
+    return "ok"
+
+
+@server.tool()
+async def list_sequences() -> list[dict]:
+    """Sequences (timelines) in the project."""
+    return await call("sequence.list")
+
+
+@server.tool()
+async def open_sequence(uuid: str) -> str:
+    """Switch to a sequence."""
+    await call("sequence.open", {"uuid": uuid})
+    return "ok"
+
+
+@server.tool()
+async def list_render_presets(filter: str | None = None) -> list[dict]:
+    """Render presets (name, category, extension)."""
+    presets = await call("render.presets")
+    return [p_ for p_ in presets if not filter or filter.lower() in (p_["name"] + p_["extension"]).lower()]
+
+
+@server.tool()
+async def render(preset: str, output: str, range: str = "all", wait: bool = False) -> dict:
+    """Render to a file. range: 'all', 'zone', or 'START-END' times (e.g. '0:10-0:20'). wait=True blocks until finished."""
+    params: dict[str, Any] = {"preset": preset, "output": output}
+    if range in ("all", "zone"):
+        params["range"] = range
+    else:
+        start, _, end = range.partition("-")
+        params["range"] = {"in": await frames(start.strip(), False), "out": await frames(end.strip(), False)}
+    job = (await call("render.start", params))["jobId"]
+    if not wait:
+        return {"jobId": job, "state": "running"}
+    return await _wait_job(job, command="render.status")
+
+
+@server.tool()
+async def render_status(job_id: int) -> dict:
+    """Progress of a render started with wait=False."""
+    return await call("render.status", {"jobId": job_id})
 
 
 def main() -> None:
