@@ -11,6 +11,7 @@ set(kdenlive_SRCS
   remotecontrol/commands_marker.cpp
   remotecontrol/commands_mixer.cpp
   remotecontrol/commands_monitor.cpp
+  remotecontrol/commands_project.cpp
   remotecontrol/commands_subtitle.cpp
   remotecontrol/commands_timeline.cpp
   remotecontrol/commands_title.cpp

@@ -31,3 +31,10 @@ std::shared_ptr<EffectStackModel> rcEffectStack(const QJsonObject &target, RcRep
 QJsonArray rcAssetParams(AssetParameterModel *model, const QDomElement &xml);
 /** @brief Set parameters {name: value} with one undo step. */
 RcReply rcSetAssetParams(const std::shared_ptr<AssetParameterModel> &model, const QJsonObject &params);
+
+/** @brief Long operations run deferred and report through job.status: start → id; finish with success or an error. */
+int rcJobStart(const QString &kind);
+void rcJobUpdate(int id, int progress);
+void rcJobFinish(int id, const QString &error = QString());
+/** @brief {state: running|done|failed, kind, progress, error?}; empty object when unknown. */
+QJsonObject rcJobStatus(int id);

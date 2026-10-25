@@ -60,3 +60,4 @@ void registerBinCommands(RcRegistry &r);
 void registerTitleCommands(RcRegistry &r);
 void registerSubtitleCommands(RcRegistry &r);
 void registerMixerCommands(RcRegistry &r);
+void registerProjectCommands(RcRegistry &r);

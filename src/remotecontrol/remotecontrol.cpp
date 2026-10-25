@@ -29,6 +29,7 @@ RemoteControl::RemoteControl(QObject *parent)
     registerTitleCommands(m_registry);
     registerSubtitleCommands(m_registry);
     registerMixerCommands(m_registry);
+    registerProjectCommands(m_registry);
     m_idle.setSingleShot(true);
     m_idle.setInterval(10000);
     connect(&m_idle, &QTimer::timeout, this, &RemoteControl::endGroup);

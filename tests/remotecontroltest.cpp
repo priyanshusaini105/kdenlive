@@ -821,3 +821,33 @@ TEST_CASE("RC mixer and frame grab", "[RemoteControl]")
     REQUIRE(errCode(rc(r, QStringLiteral("mixer.solo"), {{QStringLiteral("trackId"), atid}})) == QStringLiteral("no_gui"));
     REQUIRE(errCode(rc(r, QStringLiteral("monitor.grab"))) == QStringLiteral("no_gui"));
 }
+
+TEST_CASE("RC project and sequences", "[RemoteControl]")
+{
+    RcFixture f;
+    RemoteControl r;
+    auto ok = [](const QJsonObject &o) { return o.value(QStringLiteral("ok")).toBool(); };
+
+    REQUIRE(ok(
+        rc(r, QStringLiteral("project.setProperty"), {{QStringLiteral("name"), QStringLiteral("rc-test")}, {QStringLiteral("value"), QStringLiteral("42")}})));
+    REQUIRE(rc(r, QStringLiteral("project.getProperty"), {{QStringLiteral("name"), QStringLiteral("rc-test")}})
+                .value(QStringLiteral("result"))
+                .toObject()
+                .value(QStringLiteral("value"))
+                .toString() == QStringLiteral("42"));
+    REQUIRE(!rc(r, QStringLiteral("project.profiles")).value(QStringLiteral("result")).toArray().isEmpty());
+    REQUIRE(errCode(rc(r, QStringLiteral("project.setProfile"), {{QStringLiteral("profile"), QStringLiteral("no_such_profile")}})) ==
+            QStringLiteral("not_found"));
+
+    REQUIRE(rc(r, QStringLiteral("sequence.list")).value(QStringLiteral("result")).toArray().size() >= 1);
+    REQUIRE(errCode(rc(r, QStringLiteral("sequence.create"), {{QStringLiteral("name"), QStringLiteral("B-roll")}})) == QStringLiteral("no_gui"));
+
+    f.document.setModified(true);
+    REQUIRE(errCode(rc(r, QStringLiteral("project.new"))) == QStringLiteral("document_modified"));
+    REQUIRE(errCode(rc(r, QStringLiteral("project.open"), {{QStringLiteral("path"), QStringLiteral("/nonexistent/x.kdenlive")}})) ==
+            QStringLiteral("not_found"));
+    REQUIRE(ok(rc(r, QStringLiteral("project.discard"))));
+    REQUIRE(!f.document.isModified());
+    REQUIRE(errCode(rc(r, QStringLiteral("project.save"))) == QStringLiteral("bad_params")); // untitled: path required
+    REQUIRE(errCode(rc(r, QStringLiteral("job.status"), {{QStringLiteral("jobId"), 9999}})) == QStringLiteral("not_found"));
+}

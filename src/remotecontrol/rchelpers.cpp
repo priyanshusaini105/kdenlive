@@ -148,3 +148,48 @@ std::shared_ptr<EffectStackModel> rcEffectStack(const QJsonObject &target, RcRep
     err = rcFail(QStringLiteral("bad_params"), QStringLiteral("target.type must be clip, track, master or bin"));
     return nullptr;
 }
+
+namespace {
+struct RcJob
+{
+    QString kind;
+    QString state = QStringLiteral("running");
+    int progress = 0;
+    QString error;
+};
+QMap<int, RcJob> &jobs()
+{
+    static QMap<int, RcJob> table;
+    return table;
+}
+} // namespace
+
+int rcJobStart(const QString &kind)
+{
+    static int next = 1;
+    jobs().insert(next, RcJob{kind});
+    return next++;
+}
+
+void rcJobUpdate(int id, int progress)
+{
+    if (jobs().contains(id)) jobs()[id].progress = progress;
+}
+
+void rcJobFinish(int id, const QString &error)
+{
+    if (!jobs().contains(id)) return;
+    RcJob &job = jobs()[id];
+    job.state = error.isEmpty() ? QStringLiteral("done") : QStringLiteral("failed");
+    job.error = error;
+    if (error.isEmpty()) job.progress = 100;
+}
+
+QJsonObject rcJobStatus(int id)
+{
+    if (!jobs().contains(id)) return {};
+    const RcJob &job = jobs().value(id);
+    QJsonObject out{{QStringLiteral("state"), job.state}, {QStringLiteral("kind"), job.kind}, {QStringLiteral("progress"), job.progress}};
+    if (!job.error.isEmpty()) out.insert(QStringLiteral("error"), job.error);
+    return out;
+}
