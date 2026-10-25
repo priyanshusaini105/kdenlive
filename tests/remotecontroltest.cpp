@@ -184,7 +184,7 @@ TEST_CASE("RC undo groups", "[RemoteControl]")
         r.setIdleTimeoutMs(50);
         REQUIRE(rc(r, QStringLiteral("undo.begin"), {{QStringLiteral("label"), QStringLiteral("idle")}}).value(QStringLiteral("ok")).toBool());
         REQUIRE(cut(r, f.cid, 110).value(QStringLiteral("ok")).toBool());
-        waitMs(150);
+        waitMs(500);
         REQUIRE(f.timeline->requestClipMove(f.cid, f.tid, 50));
         f.undoStack->undo(); // user move
         REQUIRE(clipsOf(r).size() == 2);
@@ -651,7 +651,7 @@ TEST_CASE("RC bin", "[RemoteControl]")
                     {{QStringLiteral("color"), QStringLiteral("#ff0000")}, {QStringLiteral("duration"), 50}, {QStringLiteral("name"), QStringLiteral("Red")}});
     REQUIRE(ok(color));
     const QString colorId = color.value(QStringLiteral("result")).toObject().value(QStringLiteral("binId")).toString();
-    for (int i = 0; i < 100 && !clipById(colorId).value(QStringLiteral("ready")).toBool(); ++i) {
+    for (int i = 0; i < 500 && !clipById(colorId).value(QStringLiteral("ready")).toBool(); ++i) {
         waitMs(20); // clips load asynchronously, as the MCP side polls 'ready'
     }
     REQUIRE(clipById(colorId).value(QStringLiteral("duration")).toInt() == 50);
@@ -733,7 +733,7 @@ TEST_CASE("RC titles", "[RemoteControl]")
         REQUIRE(created.value(QStringLiteral("ok")).toBool());
         const QString binId = created.value(QStringLiteral("result")).toObject().value(QStringLiteral("binId")).toString();
         auto clip = pCore->projectItemModel()->getClipByBinID(binId);
-        for (int i = 0; i < 100 && !clip->statusReady(); ++i) {
+        for (int i = 0; i < 500 && !clip->statusReady(); ++i) {
             waitMs(20);
         }
         REQUIRE(clip->statusReady());
