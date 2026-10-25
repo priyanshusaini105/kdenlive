@@ -851,3 +851,22 @@ TEST_CASE("RC project and sequences", "[RemoteControl]")
     REQUIRE(errCode(rc(r, QStringLiteral("project.save"))) == QStringLiteral("bad_params")); // untitled: path required
     REQUIRE(errCode(rc(r, QStringLiteral("job.status"), {{QStringLiteral("jobId"), 9999}})) == QStringLiteral("not_found"));
 }
+
+TEST_CASE("RC render", "[RemoteControl]")
+{
+    KdenliveTests::initRenderRepository();
+    RcFixture f;
+    RemoteControl r;
+    const QJsonArray presets = rc(r, QStringLiteral("render.presets")).value(QStringLiteral("result")).toArray();
+    REQUIRE(!presets.isEmpty());
+    REQUIRE(!presets.at(0).toObject().value(QStringLiteral("extension")).toString().isEmpty());
+    QTemporaryDir dir;
+    REQUIRE(errCode(rc(r, QStringLiteral("render.start"),
+                       {{QStringLiteral("preset"), QStringLiteral("no such preset")}, {QStringLiteral("output"), dir.filePath(QStringLiteral("o.mp4"))}})) ==
+            QStringLiteral("not_found"));
+    REQUIRE(errCode(rc(r, QStringLiteral("render.start"),
+                       {{QStringLiteral("preset"), presets.at(0).toObject().value(QStringLiteral("name"))},
+                        {QStringLiteral("output"), dir.filePath(QStringLiteral("o.mp4"))},
+                        {QStringLiteral("range"), QJsonObject{{QStringLiteral("in"), 10}, {QStringLiteral("out"), 5}}}})) == QStringLiteral("bad_params"));
+    REQUIRE(errCode(rc(r, QStringLiteral("render.status"), {{QStringLiteral("jobId"), 9999}})) == QStringLiteral("not_found"));
+}
