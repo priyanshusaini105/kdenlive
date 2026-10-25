@@ -8,6 +8,7 @@
 
 #include <KActionCollection>
 #include <QAction>
+#include <QApplication>
 #include <QJsonArray>
 #include <QTimer>
 
@@ -47,7 +48,9 @@ RcReply actionTrigger(const QJsonObject &p)
         return rcFail(QStringLiteral("failed"), QStringLiteral("action '%1' is disabled right now").arg(*name));
     }
     // Deferred: the D-Bus reply returns first, so an action that opens a dialog doesn't block the caller.
-    QTimer::singleShot(0, a, &QAction::trigger);
+    QTimer::singleShot(0, a, [a]() {
+        if (!QApplication::activeModalWidget()) a->trigger();
+    });
     return rcOk(QJsonObject());
 }
 } // namespace

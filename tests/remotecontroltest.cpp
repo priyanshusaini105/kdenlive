@@ -9,6 +9,8 @@
 #include "doc/kdenlivedoc.h"
 #include "remotecontrol/remotecontrol.h"
 
+#include <QApplication>
+#include <QDialog>
 #include <QEventLoop>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -602,4 +604,21 @@ TEST_CASE("RC compositions and mixes", "[RemoteControl]")
         REQUIRE(tlGet().value(QStringLiteral("mixes")).toArray().isEmpty());
         REQUIRE(errCode(rc(r, QStringLiteral("mix.remove"), {{QStringLiteral("clipId"), b}})) == QStringLiteral("not_found"));
     }
+}
+
+TEST_CASE("RC refuses calls while a modal dialog is open", "[RemoteControl]")
+{
+    RcFixture f;
+    RemoteControl r;
+    QDialog dialog;
+    dialog.setModal(true);
+    dialog.show();
+    QApplication::processEvents();
+    REQUIRE(QApplication::activeModalWidget() == &dialog);
+    auto reply = rc(r, QStringLiteral("timeline.get"));
+    REQUIRE(errCode(reply) == QStringLiteral("failed"));
+    REQUIRE(reply.value(QStringLiteral("error")).toObject().value(QStringLiteral("message")).toString().contains(QStringLiteral("dialog")));
+    dialog.close();
+    QApplication::processEvents();
+    REQUIRE(rc(r, QStringLiteral("timeline.get")).value(QStringLiteral("ok")).toBool());
 }

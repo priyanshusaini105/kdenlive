@@ -8,6 +8,7 @@
 #include "timeline2/model/timelineitemmodel.hpp"
 #include "timeline2/model/trackmodel.hpp"
 
+#include <QApplication>
 #include <QJsonArray>
 #include <QJsonDocument>
 
@@ -91,6 +92,10 @@ QString RemoteControl::call(const QString &command, const QString &paramsJson)
     if (m_groupOpen) {
         // Any AI activity keeps the group alive; silence closes it so user edits stay separate.
         m_idle.start();
+    }
+    if (QApplication::activeModalWidget()) {
+        // We would run inside the dialog's nested event loop; re-entering Kdenlive there crashes it (seen with the backup-recovery prompt).
+        return replyJson(rcFail(QStringLiteral("failed"), QStringLiteral("a dialog is open in Kdenlive; ask the user to close it, then retry")));
     }
     auto it = m_registry.constFind(command);
     if (it == m_registry.constEnd()) {
